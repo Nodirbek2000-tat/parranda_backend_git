@@ -264,6 +264,11 @@ class InventoryCount(models.Model):
     )
     cancelled_at = models.DateTimeField("Bekor qilingan", null=True, blank=True)
     cancel_reason = models.CharField("Bekor qilish sababi", max_length=500, blank=True)
+    #: Soft delete (``warehouse.inventory.delete_count``): hidden by ``objects``; its adjustments stay posted.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Inventarizatsiya"

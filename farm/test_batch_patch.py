@@ -57,7 +57,8 @@ class BatchPatchTests(BaseAPITestCase):
         self.login_as(self.admin)
         self.assertEqual(self.client.put(f"/api/batches/{self.batch.pk}", {"supplier": "Y"}, format="json").status_code,
                          405)
-        self.assertEqual(self.client.delete(f"/api/batches/{self.batch.pk}").status_code, 405)
+        # DELETE is a soft delete now; birds of this batch are in households → 409 (logistics/tests/test_soft_delete_records.py).
+        self.assertEqual(self.client.delete(f"/api/batches/{self.batch.pk}").status_code, 409)
         self.assertEqual(self.patch({"supplier": "Y"}, batch_id=999999).status_code, 404)
 
     def test_patch_sends_no_notification(self):

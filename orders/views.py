@@ -1,6 +1,6 @@
 """API views of the orders app (API_CONTRACT_V3 §6.4, §5.5): parse/validate input, call ``services``, serialize.
 
-Access (§1.2): ``/api/orders*`` — ADMIN all actions, WAREHOUSE read, OWNER own household (create, cancel NEW;
+Access (§1.2): ``/api/orders*`` — ADMIN all actions, WAREHOUSE read, OWNER own household (create, cancel / delete NEW;
 other households → ``404``); LOGISTICS / VET → ``403``. ``/api/catalog/products`` — ADMIN, WAREHOUSE, OWNER.
 """
 
@@ -157,13 +157,23 @@ class OrderListCreateView(GenericAPIView):
 
 
 class OrderDetailView(APIView):
-    """``GET /api/orders/{id}`` with ``history`` (A, W; O own → others 404)."""
+    """``GET /api/orders/{id}`` with ``history`` (A, W; O own → others 404) · ``DELETE`` (A; O own NEW order)."""
 
-    permission_classes = [IsRoleIn(A, W, O)]
+    def get_permissions(self):
+        if self.request.method == "DELETE":
+            return [IsRoleIn(A, O)()]
+        return [IsRoleIn(A, W, O)()]
 
     @extend_schema(parameters=[ID_PATH], responses={200: OrderDetailSerializer, 403: ERROR_403, 404: ERROR_404})
     def get(self, request: Request, pk: int) -> Response:
         return order_response(request, pk)
+
+    @extend_schema(parameters=[ID_PATH], request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """Soft delete (hidden everywhere, history kept); see ``services.delete_order`` for the ``409`` rules."""
+        _get_order(request, pk)  # OWNER: another household's order → 404; deleted → 404
+        services.delete_order(actor=request.user, order_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class OrderApproveView(APIView):

@@ -16,12 +16,13 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from accounts.models import User
 from audit import services as audit
 from audit.models import AuditAction, AuditModule
 from common.formatting import fmt_number
+from common.roles import Role, role_of
 
 from . import events as warehouse_events
 from . import services
@@ -227,3 +228,44 @@ def cancel(*, actor: User, count_id: int, reason: str) -> InventoryCount:
             after={"status": InventoryCountStatus.CANCELLED, "reason": count.cancel_reason},
         )
     return count
+
+
+MSG_DELETE_APPROVED_ADMIN = "Tasdiqlangan inventarizatsiyani faqat administrator o‘chira oladi."
+MSG_DELETE_HAS_ADJUSTMENTS = (
+    "Inventarizatsiya bo‘yicha tuzatish operatsiyalari o‘tkazilgan ({ops}). Qoralama holatida uni o‘chirib bo‘lmaydi."
+)
+
+
+def delete_count(*, actor: User, count_id: int) -> None:
+    """Soft delete (``DELETE /api/inventory-counts/{id}``): the count disappears from the list and detail (404).
+
+    ``DRAFT`` / ``CANCELLED`` (A, W): nothing was posted, so nothing changes in stock. ``APPROVED`` (A only, the
+    approver's role): only hidden — its ADJUST_IN / ADJUST_OUT operations stay posted and keep the balances and
+    lots right. A ``DRAFT`` with posted adjustments (never produced by the services) is refused with ``409``.
+    """
+    with transaction.atomic():
+        count = InventoryCount.all_objects.select_for_update(of=("self",)).get(pk=count_id)
+        if count.deleted_at is not None:
+            return
+        if count.status == InventoryCountStatus.APPROVED and role_of(actor) != Role.ADMIN:
+            raise PermissionDenied(MSG_DELETE_APPROVED_ADMIN)
+        if count.status != InventoryCountStatus.APPROVED:
+            posted = list(
+                InventoryCountLine.objects.filter(count=count, adjustment__isnull=False)
+                .order_by("id")
+                .values_list("adjustment_id", flat=True)
+            )
+            if posted:
+                ops = ", ".join(f"OM-{pk:06d}" for pk in posted[:3])
+                raise Conflict(MSG_DELETE_HAS_ADJUSTMENTS.format(ops=ops))
+        before = audit.snapshot(count)
+        count.deleted_at = timezone.now()
+        count.save(update_fields=["deleted_at"])
+        audit.record(
+            module=AuditModule.INVENTORY,
+            action=AuditAction.DELETE,
+            obj=count,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "status": count.status},
+        )

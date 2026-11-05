@@ -42,7 +42,8 @@ def problems() -> list[str]:
         found.append(f"Topshiriq #{item.task_id}: “{item.product_id}” mahsuloti uchun chiqim operatsiyasi yo‘q")
     for item in LogisticsTaskItem.objects.filter(task__status__in=RESERVING, stock_transaction__isnull=False):
         found.append(f"Topshiriq #{item.task_id}: boshlanmagan topshiriqda chiqim operatsiyasi bor")
-    tasks = LogisticsTask.objects.filter(order__isnull=False, status__in=list(ORDER_STATUS_FOR_TASK)).select_related(
+    # ``all_objects``: soft-deleted tasks keep their stock operations and order link and must still add up.
+    tasks = LogisticsTask.all_objects.filter(order__isnull=False, status__in=list(ORDER_STATUS_FOR_TASK)).select_related(
         "order"
     )
     for task in tasks:

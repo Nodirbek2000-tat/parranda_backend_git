@@ -94,6 +94,19 @@ def active_task(order_id: int, *, lock: bool = False):
     return qs.order_by("id").first()
 
 
+#: Not-finished task statuses (logistics ``ACTIVE_STATUSES``): reservations, a driver or a pending confirmation.
+TASK_OPEN = ("NEW", "ASSIGNED", "ACCEPTED", "IN_TRANSIT", "DELIVERED")
+
+
+def open_task_codes(order_id: int) -> list[str]:
+    """Codes of the order's not-finished tasks (``[]`` while logistics has no tables)."""
+    model = task_model()
+    if model is None:
+        return []
+    rows = model.objects.filter(order_id=order_id, status__in=TASK_OPEN).order_by("id")
+    return [task_code(task) for task in rows]
+
+
 def task_ref(task) -> dict[str, Any] | None:
     """``{"id", "code", "status", "status_display"}`` of a task (Order object ``task``)."""
     if task is None:

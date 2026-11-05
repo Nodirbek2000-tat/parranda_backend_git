@@ -181,7 +181,8 @@ class TransitionRuleTests(LogisticsTestCase):
         self.login_as(self.logist)
         body = {"household": self.household_a.pk, "items": [{"product": self.feed.pk, "quantity": 1}]}
         self.assertEqual(self.client.post("/api/logistics/tasks", body, format="json").status_code, 403)
-        self.assertEqual(self.client.delete(url).status_code, 405)
+        # DELETE (soft delete) is ADMIN only (logistics/tests/test_soft_delete_records.py).
+        self.assertEqual(self.client.delete(url).status_code, 403)
 
     def test_owner_cannot_confirm_other_household_task(self):
         task_id = self.create_task(10)["id"]

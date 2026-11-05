@@ -793,3 +793,56 @@ def close_request(*, actor: User, pk: int, response: str | None) -> VetRequest:
         if not owner:
             events.request_updated(request_obj)
     return request_obj
+
+
+# --- Delete (soft) -------------------------------------------------------------------------------
+
+MSG_DELETE_OTHER_VET = "Bu yozuv boshqa veterinarga tegishli. Uni faqat administrator o‘chira oladi."
+MSG_DELETE_REQUEST_ADMIN_ONLY = "Murojaatni faqat administrator o‘chira oladi."
+
+_DELETABLE: dict[str, type] = {
+    "visit": VetVisit,
+    "vaccination": Vaccination,
+    "disease": DiseaseRecord,
+    "request": VetRequest,
+}
+
+
+def can_delete(actor: User, obj: VetVisit | Vaccination | DiseaseRecord | VetRequest) -> bool:
+    """ADMIN — any row; VET — his own visit / vaccination / disease record (assigned to him, or unassigned and
+    entered by him). Owner requests — ADMIN only (the owner withdraws his own NEW request with ``close``)."""
+    role = role_of(actor)
+    if role == Role.ADMIN:
+        return True
+    if role != Role.VET or isinstance(obj, VetRequest):
+        return False
+    if obj.vet_id is not None:
+        return obj.vet_id == actor.pk
+    return obj.created_by_id == actor.pk
+
+
+def delete_record(*, actor: User, kind: str, pk: int) -> None:
+    """Soft delete a visit / vaccination / disease record / owner request (``deleted_at``; the row stays as history).
+
+    Nothing else changes: a DONE vaccination keeps its stock OUT (the ledger is never touched), linked rows
+    (diseases of a visit, treatments of a disease, visits of a request) keep pointing at the hidden row. The row
+    disappears from lists, details (404), calendar, summaries, dashboards, reports, reminders, search and acts.
+    """
+    model = _DELETABLE[kind]
+    with transaction.atomic():
+        obj = model.all_objects.select_for_update(of=("self",)).get(pk=pk)
+        if obj.deleted_at is not None:
+            return
+        if not can_delete(actor, obj):
+            raise PermissionDenied(MSG_DELETE_REQUEST_ADMIN_ONLY if model is VetRequest else MSG_DELETE_OTHER_VET)
+        before = audit.snapshot(obj)
+        obj.deleted_at = timezone.now()
+        obj.save(update_fields=["deleted_at", "updated_at"])
+        audit.record(
+            module=AuditModule.VET,
+            action=AuditAction.DELETE,
+            obj=obj,
+            actor=actor,
+            before=before,
+            after={"deleted": True},
+        )

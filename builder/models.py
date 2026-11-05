@@ -13,6 +13,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from common.softdelete import SoftDeleteManager
+
 
 def _user_fk(verbose_name: str, *, null: bool = True, related_name: str = "+") -> models.ForeignKey:
     return models.ForeignKey(
@@ -172,6 +174,10 @@ class ProcessRun(_Coded):
     started_at = models.DateTimeField("Boshlangan", default=timezone.now, editable=False)
     finished_at = models.DateTimeField("Yakunlangan", null=True, blank=True)
     cancel_reason = models.CharField("Bekor qilish sababi", max_length=500, blank=True, default="")
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Jarayon"
@@ -226,6 +232,10 @@ class TaskInstance(_Coded):
     created_by = _user_fk("Yaratgan")
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
     updated_at = models.DateTimeField("O‘zgartirilgan", auto_now=True)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Vazifa"

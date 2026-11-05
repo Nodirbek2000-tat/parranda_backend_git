@@ -11,6 +11,8 @@ from django.db import models
 from django.db.models import F, Q
 from django.utils import timezone
 
+from common.softdelete import SoftDeleteManager
+
 MAX_LONG_TEXT = 4000
 
 
@@ -93,6 +95,10 @@ class VetRequest(_Coded):
     closed_by = _user_fk("Yopgan", null=True)
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Veterinarga murojaat"
@@ -134,6 +140,10 @@ class VetVisit(_Coded):
     created_by = _user_fk("Kiritgan", null=True)
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Veterinariya tekshiruvi"
@@ -190,6 +200,10 @@ class Vaccination(_Coded):
     created_by = _user_fk("Kiritgan", null=True)
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Emlash"
@@ -239,6 +253,10 @@ class DiseaseRecord(_Coded):
     created_by = _user_fk("Kiritgan", null=True)
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Kasallik qaydi"

@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from common.roles import Role
+from common.softdelete import SoftDeleteManager
 
 
 class ActKind(models.TextChoices):
@@ -48,6 +49,10 @@ class Act(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+", verbose_name="Yaratgan"
     )
     created_at = models.DateTimeField("Yaratilgan", default=timezone.now, editable=False)
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Dalolatnoma"

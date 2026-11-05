@@ -418,6 +418,13 @@ class TaskDetailView(APIView):
     def get(self, request: Request, pk: int) -> Response:
         return task_response(request, pk)
 
+    @extend_schema(parameters=[ID_PATH], request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404,
+                                                                   409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """ADMIN: soft delete (hidden, kept as history); 409 while the task is a stage of a RUNNING process."""
+        services.delete_task(actor=request.user, pk=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 def _task_action(name: str, handler, request_serializer):
     class _View(APIView):
@@ -494,6 +501,13 @@ class ProcessRunDetailView(APIView):
     @extend_schema(parameters=[ID_PATH], responses={200: ProcessRunSerializer, 404: ERROR_404})
     def get(self, request: Request, pk: int) -> Response:
         return run_response(request, pk)
+
+    @extend_schema(parameters=[ID_PATH], request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404,
+                                                                   409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """ADMIN: soft delete a finished / cancelled run and its tasks; 409 while RUNNING or with open tasks."""
+        services.delete_process_run(actor=request.user, pk=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ProcessRunCancelView(APIView):

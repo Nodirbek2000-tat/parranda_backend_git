@@ -60,6 +60,7 @@ ReadAVO = IsRoleIn(A, V, O)
 WriteAV = IsRoleIn(A, V)
 OnlyV = IsRoleIn(V)
 OnlyO = IsRoleIn(O)
+OnlyA = IsRoleIn(A)
 StaffOrOwner = IsRoleIn(A, V, O)
 
 MSG_CALENDAR_RANGE = "Davr 62 kundan oshmasligi kerak."
@@ -131,6 +132,17 @@ class _VetViewSet(viewsets.GenericViewSet):
         return Response(self.serialize(obj, **self.detail_context()), status=status_code)
 
 
+class _DeleteMixin:
+    """``DELETE`` on the detail route → 204 (soft delete, see ``services.delete_record``)."""
+
+    delete_kind = ""
+
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        services.delete_record(actor=request.user, kind=self.delete_kind, pk=self.get_object().pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 def _planned_filters(request: Request, qs: QuerySet) -> QuerySet:
     status_value = query.get_choice(request, "status", VetStatus)
     if status_value:
@@ -169,7 +181,8 @@ PLANNED_FILTERS = [
     complete=extend_schema(request=VisitCompleteSerializer, responses={200: VetVisitSerializer, **ERRORS}),
     cancel=extend_schema(request=VetReasonSerializer, responses={200: VetVisitSerializer, **ERRORS}),
 )
-class VetVisitViewSet(_VetViewSet):
+class VetVisitViewSet(_DeleteMixin, _VetViewSet):
+    delete_kind = "visit"
     serializer_class = VetVisitSerializer
     object_type = "VetVisit"
 
@@ -238,7 +251,8 @@ VaccinationCampaignSerializer = inline_serializer(
     complete=extend_schema(request=VaccinationCompleteSerializer, responses={200: VaccinationSerializer, **ERRORS}),
     cancel=extend_schema(request=VetReasonSerializer, responses={200: VaccinationSerializer, **ERRORS}),
 )
-class VaccinationViewSet(_VetViewSet):
+class VaccinationViewSet(_DeleteMixin, _VetViewSet):
+    delete_kind = "vaccination"
     serializer_class = VaccinationSerializer
     object_type = "Vaccination"
 
@@ -319,7 +333,8 @@ class VaccinationViewSet(_VetViewSet):
         request=DiseaseUpdateSerializer, responses={200: DiseaseRecordSerializer, 409: ERROR_400, **ERRORS}
     ),
 )
-class DiseaseViewSet(_VetViewSet):
+class DiseaseViewSet(_DeleteMixin, _VetViewSet):
+    delete_kind = "disease"
     serializer_class = DiseaseRecordSerializer
     object_type = "DiseaseRecord"
 
@@ -440,7 +455,8 @@ class TreatmentViewSet(_VetViewSet):
     close=extend_schema(request=RequestCloseSerializer, responses={200: VetRequestSerializer, **ERRORS}),
     plan_visit=extend_schema(request=RequestVisitPlanSerializer, responses={201: VetVisitSerializer, **ERRORS}),
 )
-class VetRequestViewSet(_VetViewSet):
+class VetRequestViewSet(_DeleteMixin, _VetViewSet):
+    delete_kind = "request"
     serializer_class = VetRequestSerializer
     object_type = "VetRequest"
 
@@ -451,6 +467,8 @@ class VetRequestViewSet(_VetViewSet):
             return [OnlyO()]
         if self.action == "take":
             return [OnlyV()]
+        if self.action == "destroy":
+            return [OnlyA()]
         return [WriteAV()]
 
     def base_queryset(self) -> QuerySet:

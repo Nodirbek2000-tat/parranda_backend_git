@@ -205,7 +205,8 @@ def create_batch(*, actor: User, **fields) -> PoultryBatch:
     for _ in range(BATCH_CODE_ATTEMPTS):
         try:
             with transaction.atomic():
-                last = PoultryBatch.objects.filter(arrived_at__year=year).aggregate(m=Max("year_seq"))["m"] or 0
+                # ``all_objects``: a soft-deleted batch keeps its code (history), so its number is never reused.
+                last = PoultryBatch.all_objects.filter(arrived_at__year=year).aggregate(m=Max("year_seq"))["m"] or 0
                 seq = last + 1
                 batch = PoultryBatch.objects.create(
                     code=f"NNP-{year}-{seq:03d}", year_seq=seq, created_by=actor, **fields
@@ -236,6 +237,56 @@ def update_batch(*, actor: User | None, batch_id: int, changes: dict) -> Poultry
             batch.save(update_fields=changed)
         audit.record_update(AuditModule.BATCHES, batch, actor, before)
     return batch
+
+
+MSG_BATCH_BIRDS_OUT = (
+    "Partiyaning {birds} ta parrandasi hali xonadonlarda ({codes}). Avval ularni markazga qaytaring "
+    "yoki nobud bo‘lish / chiqim sifatida qayd eting, keyin partiyani o‘chirish mumkin."
+)
+
+
+def delete_batch(*, actor: User | None, batch_id: int) -> None:
+    """Soft delete a batch (``DELETE /api/batches/{id}``): it and its movements disappear from lists, search,
+    pickers, dashboards and statistics together (``PoultryBatch.objects`` / ``PoultryMovement.objects``), so the
+    bird totals stay consistent; the rows are kept (daily reports, vet records and audit still point at them).
+
+    Refused (``409``) while birds of the batch are still in households: hiding them would silently change
+    the households' flocks. Birds still in the center may be deleted with the batch (a batch entered by mistake).
+    """
+    with transaction.atomic():
+        # Same row lock as every movement of the batch (``_create_movement_locked``).
+        batch = PoultryBatch.all_objects.select_for_update(of=("self",)).get(pk=batch_id)
+        if batch.deleted_at is not None:
+            return
+        rows = (
+            PoultryMovement.all_objects.filter(batch_id=batch.pk, household__isnull=False)
+            .order_by()
+            .values("household_id")
+            .annotate(count=selectors._sum(selectors._household_delta()))
+            .filter(count__gt=0)
+            .order_by("household_id")
+            .values_list("household_id", "count")
+        )
+        out = list(rows)
+        if out:
+            raise InUse(
+                MSG_BATCH_BIRDS_OUT.format(
+                    birds=sum(count for _pk, count in out),
+                    codes=_codes([f"XN-{pk:04d}" for pk, _count in out]),
+                )
+            )
+        before = audit.snapshot(batch)
+        center_stock = selectors.batch_center_stock(batch)
+        batch.deleted_at = timezone.now()
+        batch.save(update_fields=["deleted_at"])
+        audit.record(
+            module=AuditModule.BATCHES,
+            action=AuditAction.DELETE,
+            obj=batch,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "center_stock": center_stock},
+        )
 
 
 # --- Movements ------------------------------------------------------------------------

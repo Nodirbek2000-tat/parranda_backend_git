@@ -13,7 +13,7 @@ from common import query
 from common.ids import ID_REGEX
 from common.permissions import IsAnyRole, IsRoleIn, IsStaffRole, ReadOnlyFor
 from common.roles import Role, role_of
-from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_404, query as query_param
+from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_403, ERROR_404, query as query_param
 from stats import services as stats_services
 from stats.schema import PERIOD_PARAMETERS, ProductStatsSerializer
 
@@ -347,6 +347,13 @@ class InventoryCountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         get_object_or_404(InventoryCount.objects.only("pk"), pk=pk)
         inventory.approve(actor=request.user, count_id=int(pk))
         return self._detail(pk)
+
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        """Soft delete (A, W; APPROVED: A only): hidden, stock adjustments stay; see ``inventory.delete_count``."""
+        count = get_object_or_404(InventoryCount.objects.only("pk"), pk=pk)
+        inventory.delete_count(actor=request.user, count_id=count.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(request=InventoryCancelSerializer, responses={200: InventoryCountSerializer, 409: ERROR_409})
     @action(detail=True, methods=["post"], url_path="cancel")

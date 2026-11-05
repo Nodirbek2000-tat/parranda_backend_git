@@ -33,6 +33,7 @@ from warehouse.models import MAX_AMOUNT, WHOLE_UNITS, Product, Unit
 from . import events, hooks, stock
 from .models import (
     ACTIVE_STATUSES,
+    WORKING_STATUSES,
     LogisticsTask,
     LogisticsTaskItem,
     LogisticsTaskStatusLog,
@@ -694,6 +695,51 @@ def cancel_task(
         hooks.sync_order(task, actor)
         events.task_cancelled(task, old_status=old)
     return task
+
+
+MSG_TASK_WORKING = (
+    "Topshiriq ishda (holati: {status}) — haydovchi uni bajarmoqda. Avval topshiriqni bekor qiling, "
+    "keyin o‘chirish mumkin."
+)
+MSG_TASK_AWAITS_CONFIRMATION = (
+    "Topshiriq yetkazilgan, {order} buyurtmasi egasining tasdig‘ini kutmoqda. Avval qabul qilinganini "
+    "tasdiqlang, keyin o‘chirish mumkin."
+)
+MSG_TASK_DELETED_REASON = "Topshiriq o‘chirildi"
+
+
+def delete_task(*, actor: User, task_id: int) -> None:
+    """Soft delete a task (``DELETE /api/logistics/tasks/{id}``, ADMIN like cancel): hidden from the board,
+    lists, search, summary, the bot and pickers; its items, stock operations, status log and audit stay.
+
+    - ``ASSIGNED / ACCEPTED / IN_TRANSIT`` (a driver is working on it) → ``409``: cancel it first;
+    - ``DELIVERED`` of an order (the order waits for the owner's confirmation) → ``409``;
+    - ``NEW`` → cancelled first in the same transaction (reservations released, the order goes back to
+      ``APPROVED``), then hidden;
+    - ``CANCELLED / CONFIRMED`` and an order-less ``DELIVERED`` → hidden as they are.
+    """
+    with transaction.atomic():
+        task = _lock_task(task_id, actor)  # order lock → task lock (§17.1); invisible / deleted → 404
+        if role_of(actor) != Role.ADMIN:
+            raise PermissionDenied("Sizda bu amal uchun ruxsat yo‘q.")
+        if task.status in WORKING_STATUSES:
+            raise Conflict(MSG_TASK_WORKING.format(status=task.get_status_display()))
+        if task.status == TaskStatus.DELIVERED and task.order_id:
+            raise Conflict(MSG_TASK_AWAITS_CONFIRMATION.format(order=hooks.order_code(task.order_id)))
+        before = audit.snapshot(task)
+        if task.status == TaskStatus.NEW:
+            cancel_task(actor=actor, task_id=task.pk, reason=MSG_TASK_DELETED_REASON)
+            task.refresh_from_db()
+        task.deleted_at = timezone.now()
+        task.save(update_fields=["deleted_at", "updated_at"])
+        audit.record(
+            module=AuditModule.LOGISTICS,
+            action=AuditAction.DELETE,
+            obj=task,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "status": task.status},
+        )
 
 
 # --- Vehicles and drivers (§7.1, §7.2) ----------------------------------------------------------

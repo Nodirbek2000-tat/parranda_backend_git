@@ -122,7 +122,8 @@ class Command(BaseCommand):
     # --- reset ----------------------------------------------------------------------
 
     def _wipe(self) -> None:
-        # ``all_objects``: soft-deleted households, products, vehicles and drivers are wiped too.
+        # ``all_objects``: soft-deleted households, batches, products, orders, tasks, inventories, vehicles, drivers
+        # and vet records are wiped too.
         owner_ids = list(Household.all_objects.values_list("owner_id", flat=True))
         Notification.objects.all().delete()
         # V3 modules (orders, logistics, vet, files) reference households, products and stock operations.
@@ -132,12 +133,12 @@ class Command(BaseCommand):
         from vet.models import DiseaseRecord, Treatment, Vaccination, VetRequest, VetVisit
 
         Treatment.objects.all().delete()
-        DiseaseRecord.objects.all().delete()
-        Vaccination.objects.all().delete()
-        VetVisit.objects.all().delete()
-        VetRequest.objects.all().delete()
-        LogisticsTask.objects.all().delete()  # items and status logs cascade
-        Order.objects.all().delete()
+        DiseaseRecord.all_objects.all().delete()
+        Vaccination.all_objects.all().delete()
+        VetVisit.all_objects.all().delete()
+        VetRequest.all_objects.all().delete()
+        LogisticsTask.all_objects.all().delete()  # items and status logs cascade
+        Order.all_objects.all().delete()
         Driver.all_objects.all().delete()
         Vehicle.all_objects.all().delete()
         for attachment in Attachment.objects.all():
@@ -147,13 +148,13 @@ class Command(BaseCommand):
         # V3 warehouse rows that PROTECT stock operations (lots, allocations, inventory adjustments).
         from warehouse.models import InventoryCount, StockLot, StockLotAllocation
 
-        InventoryCount.objects.all().delete()  # lines cascade
+        InventoryCount.all_objects.all().delete()  # lines cascade
         StockLotAllocation.objects.all().delete()
         StockLot.objects.all().delete()
         StockTransaction.objects.all().delete()
-        PoultryMovement.objects.all().delete()
+        PoultryMovement.all_objects.all().delete()
         Product.all_objects.all().delete()
-        PoultryBatch.objects.all().delete()
+        PoultryBatch.all_objects.all().delete()
         Household.all_objects.all().delete()
         User.objects.filter(pk__in=owner_ids).delete()
         User.objects.filter(username__in=DEMO_STAFF).delete()

@@ -1,6 +1,7 @@
 """Orders (API_CONTRACT_V3 §6): Order, OrderItem, OrderStatusLog.
 
-Orders are never deleted. Status changes happen only in :mod:`orders.services` (own transitions) and,
+Orders are never deleted from the database: ``DELETE /api/orders/{id}`` is a soft delete
+(:func:`orders.services.delete_order`, ``deleted_at`` + :class:`~common.softdelete.SoftDeleteManager`). Status changes happen only in :mod:`orders.services` (own transitions) and,
 for the delivery part of the life cycle, through :func:`orders.services.sync_order_with_task`, which the
 logistics services call under the order row lock.
 """
@@ -10,6 +11,8 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+
+from common.softdelete import SoftDeleteManager
 
 
 class OrderKind(models.TextChoices):
@@ -70,6 +73,11 @@ class Order(models.Model):
     cancelled_at = models.DateTimeField("Bekor qilingan", null=True, blank=True)
     cancel_reason = models.CharField("Bekor qilish sababi", max_length=NOTE_MAX, blank=True)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    #: Soft delete (``orders.services.delete_order``): hidden by ``objects``, kept for task / audit history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Buyurtma"
@@ -101,7 +109,7 @@ class Order(models.Model):
 
 
 class OrderItem(models.Model):
-    # CASCADE is never exercised: orders are not deleted (no DELETE endpoint, services only).
+    # CASCADE is never exercised: orders are only soft-deleted (``deleted_at``), never removed.
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items", verbose_name="Buyurtma")
     product = models.ForeignKey(
         "warehouse.Product", on_delete=models.PROTECT, related_name="order_items", verbose_name="Mahsulot"

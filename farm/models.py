@@ -94,6 +94,12 @@ class PoultryBatch(models.Model):
         verbose_name="Kiritgan",
     )
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    #: Soft delete (``farm.services.delete_batch``): hidden by ``objects`` (and its movements by
+    #: ``PoultryMovement.objects``), kept for history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Parranda partiyasi"
@@ -117,6 +123,18 @@ class MovementType(models.TextChoices):
     RETURN = "RETURN", "Xonadondan qaytarish"
     DEATH = "DEATH", "Nobud bo‘lish"
     OUT = "OUT", "Sotish / boshqa chiqim"
+
+
+class VisibleMovementManager(models.Manager):
+    """Movements of soft-deleted batches are hidden together with the batch.
+
+    Every bird number (dashboards, statistics, reports, movement lists) is aggregated from
+    ``PoultryMovement.objects`` and the batches' ``initial_quantity`` from ``PoultryBatch.objects``, so both sides
+    drop a deleted batch together and the totals stay consistent. ``all_objects`` sees every row (integrity).
+    """
+
+    def get_queryset(self) -> models.QuerySet:
+        return super().get_queryset().filter(batch__deleted_at__isnull=True)
 
 
 class PoultryMovement(models.Model):
@@ -146,6 +164,9 @@ class PoultryMovement(models.Model):
         verbose_name="Kiritgan",
     )
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+
+    objects = VisibleMovementManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Parranda harakati"

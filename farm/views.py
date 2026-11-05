@@ -16,7 +16,7 @@ from common import query
 from common.ids import ID_REGEX
 from common.permissions import IsAdminOrOwnerRole, IsAdminRole, IsOwnerRole, IsRoleIn, ReadOnlyFor
 from common.roles import Role, role_of
-from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_404, DetailSerializer, query as query_param
+from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_403, ERROR_404, DetailSerializer, query as query_param
 from stats import services as stats_services
 from stats.schema import PERIOD_PARAMETERS, BatchStatsSerializer, HouseholdStatsSerializer
 
@@ -232,6 +232,13 @@ class BatchViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.Ge
         serializer.is_valid(raise_exception=True)
         services.update_batch(actor=request.user, batch_id=batch.pk, changes=dict(serializer.validated_data))
         return Response(BatchSerializer(self.get_queryset().get(pk=batch.pk)).data)
+
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        """Delete a batch (A, W): hidden with its movements, kept as history; see services.delete_batch."""
+        batch = self.get_object()
+        services.delete_batch(actor=request.user, batch_id=batch.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(parameters=PERIOD_PARAMETERS, responses=BatchStatsSerializer)
     @action(detail=True, methods=["get"], url_path="stats", pagination_class=None)

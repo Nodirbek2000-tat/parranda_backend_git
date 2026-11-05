@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from farm import selectors
 from farm.selectors import _center_delta, _household_delta
-from farm.models import DailyReport, Household, MovementType, PoultryMovement
+from farm.models import DailyReport, Household, MovementType, PoultryBatch, PoultryMovement
 from warehouse.models import OUTGOING_TYPES, Product, StockTransaction, StockTransactionType
 
 
@@ -78,7 +78,7 @@ class Command(BaseCommand):
         sums: dict[int, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         per_household: dict[tuple[int, int], int] = defaultdict(int)
         rows = (
-            PoultryMovement.objects.order_by()
+            PoultryMovement.all_objects.order_by()
             .values("batch_id", "household_id", "type")
             .annotate(quantity=Sum("quantity"))
             .values_list("batch_id", "household_id", "type", "quantity")
@@ -89,7 +89,8 @@ class Command(BaseCommand):
             if household_id is not None:
                 sign = 1 if movement_type == MovementType.DISTRIBUTE else -1
                 per_household[(batch_id, household_id)] += sign * quantity
-        annotated = {batch.pk: batch for batch in selectors.batches_with_counts()}
+        # ``all_objects``: soft-deleted batches keep their movements and must still add up.
+        annotated = {batch.pk: batch for batch in selectors.batches_with_counts(PoultryBatch.all_objects.all())}
         for batch_id, batch in annotated.items():
             s = sums[batch_id]
             distributed = s["DISTRIBUTE:households"]
@@ -117,13 +118,13 @@ class Command(BaseCommand):
                 code = annotated[batch_id].code if batch_id in annotated else batch_id
                 self.problem(f"Partiya {code}, xonadon XN-{household_id:04d}: soni manfiy ({count}).")
         early = (
-            PoultryMovement.objects.filter(Q(date__gt=today) | Q(date__lt=F("batch__arrived_at")))
+            PoultryMovement.all_objects.filter(Q(date__gt=today) | Q(date__lt=F("batch__arrived_at")))
             .order_by("id")
             .values_list("id", "date", "batch__code")
         )
         for movement_id, day, code in early:
             self.problem(f"Harakat TR-{movement_id:06d} ({day:%d.%m.%Y}): sana kelajakda yoki partiya {code} kelishidan oldin.")
-        transfers = PoultryMovement.objects.filter(
+        transfers = PoultryMovement.all_objects.filter(
             type__in=[MovementType.DISTRIBUTE, MovementType.RETURN], household__isnull=True
         ).values_list("id", flat=True)
         for movement_id in transfers:
@@ -140,7 +141,7 @@ class Command(BaseCommand):
         reconstruct past days from these movements and would show negative birds there.
         """
         rows = (
-            PoultryMovement.objects.order_by()
+            PoultryMovement.all_objects.order_by()
             .values("batch_id", "batch__code", "batch__initial_quantity", "household_id", "date")
             .annotate(household_net=Sum(_household_delta()), center_net=Sum(_center_delta()))
             .order_by("batch_id", "household_id", "date")

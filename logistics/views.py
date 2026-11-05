@@ -220,7 +220,7 @@ class TaskListView(GenericAPIView):
 
 class TaskDetailView(APIView):
     def get_permissions(self):
-        if self.request.method == "PATCH":
+        if self.request.method in ("PATCH", "DELETE"):
             return [IsRoleIn(Role.ADMIN)()]
         return [TaskReadRoles()]
 
@@ -234,6 +234,12 @@ class TaskDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         services.update_task(actor=request.user, task_id=pk, changes=dict(serializer.validated_data))
         return _detail(pk, request)
+
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """Soft delete (ADMIN): hidden everywhere, history kept; see ``services.delete_task`` for the ``409`` rules."""
+        services.delete_task(actor=request.user, task_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class _TaskActionView(APIView):

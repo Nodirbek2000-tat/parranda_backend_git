@@ -18,6 +18,7 @@ from audit.models import AuditAction, AuditModule
 from builder.access import matches_ref, scope_households
 from builder.models import Blueprint, BlueprintKind, BlueprintStatus, TaskInstance, TaskStatus
 from common.formatting import fmt_date
+from common.permissions import MSG_NO_PERMISSION
 from common.roles import Role, is_super_admin, role_of
 from farm.models import Household
 
@@ -501,3 +502,22 @@ def record_export(act: Act, actor: User) -> None:
         after={"code": act.code, "format": "pdf"},
     )
 
+
+
+# --- Delete (soft) -----------------------------------------------------------------------------
+
+
+def delete_act(*, actor: User, act: Act) -> None:
+    """ADMIN: soft delete an act (``deleted_at``). The frozen snapshot and the audit history stay; the act
+    disappears from the list, the detail and the PDF download (404)."""
+    if role_of(actor) != Role.ADMIN:
+        raise PermissionDenied(MSG_NO_PERMISSION)
+    with transaction.atomic():
+        act = Act.all_objects.select_for_update(of=("self",)).get(pk=act.pk)
+        if act.deleted_at is not None:
+            return
+        before = audit.snapshot(act)
+        act.deleted_at = timezone.now()
+        act.save(update_fields=["deleted_at"])
+        audit.record(module=AuditModule.ACTS, action=AuditAction.DELETE, obj=act, actor=actor, before=before,
+                     after={"deleted": True})

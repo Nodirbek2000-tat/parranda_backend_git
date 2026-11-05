@@ -103,6 +103,12 @@ class ActDetailView(APIView):
     def get(self, request: Request, pk: int) -> Response:
         return Response(ActDetailSerializer(_act(request, pk)).data)
 
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404})
+    def delete(self, request: Request, pk: int) -> Response:
+        """ADMIN: soft delete (hidden from lists, kept with its audit history)."""
+        services.delete_act(actor=request.user, act=_act(request, pk))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class ActPdfView(APIView):
     permission_classes = [IsAuthenticatedRole]

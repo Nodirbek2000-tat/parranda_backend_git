@@ -371,9 +371,9 @@ def delete_blueprint(*, actor: User, pk: int) -> None:
             raise Conflict(MSG_DELETE_DRAFT_ONLY)
         used = (
             UserAccess.objects.filter(profile=bp).exists()
-            or TaskInstance.objects.filter(template=bp).exists()
+            or TaskInstance.all_objects.filter(template=bp).exists()  # soft-deleted tasks still reference it
             or FormSubmission.objects.filter(form=bp).exists()
-            or ProcessRun.objects.filter(process=bp).exists()
+            or ProcessRun.all_objects.filter(process=bp).exists()
             or _referencing(bp, include_archived=True)
         )
         if used:
@@ -395,9 +395,10 @@ def usage_map(blueprints: list[Blueprint]) -> dict[int, dict[str, Any]]:
         return {row[field]: row["n"] for row in rows}
 
     users = counts(UserAccess.objects.all(), "profile_id")
-    tasks = counts(TaskInstance.objects.all(), "template_id")
+    # ``all_objects``: soft-deleted tasks / runs still reference the blueprint (it cannot be deleted).
+    tasks = counts(TaskInstance.all_objects.all(), "template_id")
     submissions = counts(FormSubmission.objects.all(), "form_id")
-    runs = counts(ProcessRun.objects.all(), "process_id")
+    runs = counts(ProcessRun.all_objects.all(), "process_id")
     reverse: dict[int, list[dict[str, Any]]] = defaultdict(list)
     wanted = set(ids)
     for row in Blueprint.objects.filter(
@@ -1024,3 +1025,80 @@ def cancel_process(*, actor: User, pk: int, reason: str = "") -> ProcessRun:
         audit.record(module=AuditModule.BUILDER, action=AuditAction.STATUS_CHANGE, obj=run, actor=actor,
                      before={"status": ProcessRunStatus.RUNNING}, after={"status": run.status, "reason": reason})
     return run
+
+
+# --- Delete (soft) -------------------------------------------------------------------------------
+
+MSG_TASK_IN_RUNNING_PROCESS = (
+    "Vazifa davom etayotgan jarayonga tegishli ({code}). Avval jarayonni bekor qiling, keyin uni o‘chiring."
+)
+MSG_RUN_RUNNING = "Jarayon hali davom etmoqda. Avval uni bekor qiling, keyin o‘chiring."
+MSG_RUN_OPEN_TASKS = (
+    "Jarayonning yakunlanmagan vazifalari bor ({codes}). Avval ularni yakunlang yoki bekor qiling."
+)
+OPEN_TASK_STATUSES = (TaskStatus.OPEN, TaskStatus.RETURNED, TaskStatus.SUBMITTED)
+
+
+def _codes(items: list[str]) -> str:
+    shown = ", ".join(items[:3])
+    return f"{shown} va yana {len(items) - 3} ta" if len(items) > 3 else shown
+
+
+def _soft_delete_task(task: TaskInstance, actor: User, **extra: Any) -> None:
+    before = audit.snapshot(task)
+    task.deleted_at = timezone.now()
+    task.save(update_fields=["deleted_at", "updated_at"])
+    audit.record(module=AuditModule.BUILDER, action=AuditAction.DELETE, obj=task, actor=actor, before=before,
+                 after={"deleted": True, **extra})
+
+
+def delete_task(*, actor: User, pk: int) -> None:
+    """ADMIN: soft delete a task (``deleted_at``; submissions, acts and audit keep pointing at it).
+
+    Refused (``409``) while the task is a stage of a RUNNING process — cancel the process first (that also
+    cancels its open tasks), then delete the process. An open standalone task is simply removed from the lists.
+    """
+    if role_of(actor) != Role.ADMIN:
+        raise PermissionDenied(MSG_NO_PERMISSION)
+    with transaction.atomic():
+        row = tasks_visible(actor).filter(pk=pk).values("pk", "process_run_id").first()
+        if row is None:
+            raise NotFound("Vazifa topilmadi.")
+        run = None
+        if row["process_run_id"]:  # lock order: run → task (as in _lock_task)
+            run = ProcessRun.all_objects.select_for_update(of=("self",)).get(pk=row["process_run_id"])
+        task = TaskInstance.all_objects.select_for_update(of=("self",)).get(pk=pk)
+        if task.deleted_at is not None:
+            return
+        if run is not None and run.status == ProcessRunStatus.RUNNING and run.deleted_at is None:
+            raise Conflict(MSG_TASK_IN_RUNNING_PROCESS.format(code=run.code))
+        _soft_delete_task(task, actor)
+
+
+def delete_process_run(*, actor: User, pk: int) -> None:
+    """ADMIN: soft delete a finished / cancelled process run together with its stage tasks (kept as history).
+
+    Refused (``409``) while the run is RUNNING (cancel it first — cancelling also cancels its open tasks) or
+    while one of its tasks is not finished yet (e.g. a SUBMITTED stage still waiting for approval).
+    """
+    if role_of(actor) != Role.ADMIN:
+        raise PermissionDenied(MSG_NO_PERMISSION)
+    with transaction.atomic():
+        if not runs_visible(actor).filter(pk=pk).exists():
+            raise NotFound("Jarayon topilmadi.")
+        run = ProcessRun.all_objects.select_for_update(of=("self",)).get(pk=pk)
+        if run.deleted_at is not None:
+            return
+        if run.status == ProcessRunStatus.RUNNING:
+            raise Conflict(MSG_RUN_RUNNING)
+        tasks = list(TaskInstance.objects.select_for_update(of=("self",)).filter(process_run=run).order_by("id"))
+        open_codes = [task.code for task in tasks if task.status in OPEN_TASK_STATUSES]
+        if open_codes:
+            raise Conflict(MSG_RUN_OPEN_TASKS.format(codes=_codes(open_codes)))
+        before = audit.snapshot(run)
+        run.deleted_at = timezone.now()
+        run.save(update_fields=["deleted_at"])
+        audit.record(module=AuditModule.BUILDER, action=AuditAction.DELETE, obj=run, actor=actor, before=before,
+                     after={"deleted": True, "tasks": [task.code for task in tasks]})
+        for task in tasks:
+            _soft_delete_task(task, actor, process_run=run.code)

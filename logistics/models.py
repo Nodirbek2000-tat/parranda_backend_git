@@ -170,6 +170,11 @@ class LogisticsTask(models.Model):
     )
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    #: Soft delete (``logistics.services.delete_task``): hidden by ``objects``, kept for order / stock history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Logistika topshirig‘i"

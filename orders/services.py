@@ -81,7 +81,8 @@ class ItemInput:
 def lock_order(order_id: int) -> Order:
     """Lock and return the order row (first lock of every order/logistics transition)."""
     # of=("self",): PostgreSQL would otherwise also lock the joined household and user rows.
-    return Order.objects.select_for_update(of=("self",)).select_related("household__owner").get(pk=order_id)
+    # ``all_objects``: a finished task of a soft-deleted order still reaches its order (and gets its ``409``).
+    return Order.all_objects.select_for_update(of=("self",)).select_related("household__owner").get(pk=order_id)
 
 
 def _actor_name(actor: User | None) -> str:
@@ -328,6 +329,56 @@ def cancel_order(*, actor: User, order_id: int, reason: str = "") -> Order:
         _transition(order, OrderStatus.CANCELLED, actor, reason)
         events.order_cancelled(order, by_owner=is_owner)
     return order
+
+
+# --- Delete ---------------------------------------------------------------------------------
+
+MSG_DELETE_OWNER_NEW_ONLY = "Faqat yangi (hali ko‘rib chiqilmagan) buyurtmani o‘chirish mumkin."
+MSG_DELETE_IN_DELIVERY = (
+    "Buyurtma yetkazilmoqda yoki qabul qilinishi kutilmoqda ({status}). Avval yetkazib berish yakunlansin "
+    "yoki logistika topshirig‘i bekor qilinsin."
+)
+MSG_DELETE_OPEN_TASK = (
+    "Buyurtmaning yakunlanmagan logistika topshirig‘i bor ({codes}). Avval topshiriqni bekor qiling yoki "
+    "o‘chiring, keyin buyurtmani o‘chirish mumkin."
+)
+
+
+def delete_order(*, actor: User, order_id: int) -> None:
+    """Soft delete (``DELETE /api/orders/{id}``): the order disappears from lists, search, dashboards and the
+    bot; its rows, status history, tasks and audit stay.
+
+    OWNER: own ``NEW`` order only (like cancel). ADMIN: any status, refused (``409``) while the order is on the
+    way / awaiting confirmation or has a not-finished logistics task (it holds stock reservations / a driver).
+    """
+    is_owner = role_of(actor) == Role.OWNER
+    with transaction.atomic():
+        order = Order.all_objects.select_for_update(of=("self",)).select_related("household__owner").get(pk=order_id)
+        if order.deleted_at is not None:
+            return
+        if is_owner:
+            if order.household.owner_id != actor.pk:  # views already answer 404; defence in depth
+                raise Http404
+            if order.status != OrderStatus.NEW:
+                raise Conflict(MSG_DELETE_OWNER_NEW_ONLY)
+        if order.status in (OrderStatus.IN_DELIVERY, OrderStatus.DELIVERED):
+            raise Conflict(MSG_DELETE_IN_DELIVERY.format(status=order.get_status_display()))
+        open_tasks = bridge.open_task_codes(order.pk)
+        if open_tasks:
+            shown = ", ".join(open_tasks[:3])
+            codes = f"{shown} va yana {len(open_tasks) - 3} ta" if len(open_tasks) > 3 else shown
+            raise Conflict(MSG_DELETE_OPEN_TASK.format(codes=codes))
+        before = audit.snapshot(order)
+        order.deleted_at = timezone.now()
+        order.save(update_fields=["deleted_at", "updated_at"])
+        audit.record(
+            module=AuditModule.ORDERS,
+            action=AuditAction.DELETE,
+            obj=order,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "status": order.status},
+        )
 
 
 # --- Logistics ------------------------------------------------------------------------------
