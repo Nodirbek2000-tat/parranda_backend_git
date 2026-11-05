@@ -193,8 +193,12 @@ def create_blueprint(*, actor: User, kind: str, name: str, description: str = ""
     return bp
 
 
-def _change(bp: Blueprint, changes: dict[str, Any], actor: User) -> Blueprint:
-    """PATCH semantics on a locked row: in place for draft/test, parked in ``pending`` for active."""
+def _change(bp: Blueprint, changes: dict[str, Any], actor: User, *, apply: bool = False) -> Blueprint:
+    """PATCH semantics on a locked row: in place for draft/test, parked in ``pending`` for active.
+
+    ``apply=True`` (one-click «Saqlash»): an active blueprint is changed immediately — version+1 + history,
+    same reference checks as ``activate``; any parked pending change is dropped.
+    """
     if bp.status == BlueprintStatus.ARCHIVED:
         raise Conflict(MSG_ARCHIVED)
     base = bp.pending if bp.status == BlueprintStatus.ACTIVE and bp.pending else _state(bp)
@@ -204,7 +208,15 @@ def _change(bp: Blueprint, changes: dict[str, Any], actor: User) -> Blueprint:
         "data": schemas.validate_data(bp.kind, changes["data"]) if "data" in changes else base.get("data", {}),
     }
     comment = changes.get("comment", "") or ""
-    if bp.status == BlueprintStatus.ACTIVE:
+    if bp.status == BlueprintStatus.ACTIVE and apply:
+        _refs_status_check(bp.kind, state["data"], {BlueprintStatus.ACTIVE})
+        bp.pending, bp.pending_by, bp.pending_at = None, None, None
+        bp.activated_by, bp.activated_at = actor, timezone.now()
+        if state != _state(bp):
+            _apply(bp, state, actor, comment or "Saqlandi")
+        else:
+            bp.save()
+    elif bp.status == BlueprintStatus.ACTIVE:
         before = audit.snapshot(bp)
         bp.pending = {**state, "comment": comment}
         bp.pending_by = actor
@@ -216,9 +228,9 @@ def _change(bp: Blueprint, changes: dict[str, Any], actor: User) -> Blueprint:
     return bp
 
 
-def update_blueprint(*, actor: User, pk: int, changes: dict[str, Any]) -> Blueprint:
+def update_blueprint(*, actor: User, pk: int, changes: dict[str, Any], apply: bool = False) -> Blueprint:
     with transaction.atomic():
-        return _change(_lock(pk), changes, actor)
+        return _change(_lock(pk), changes, actor, apply=apply)
 
 
 def _status_change(bp: Blueprint, new_status: str, actor: User, **extra: Any) -> None:

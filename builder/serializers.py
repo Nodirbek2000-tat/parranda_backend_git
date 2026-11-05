@@ -111,6 +111,8 @@ class BlueprintCreateSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=200)
     description = serializers.CharField(max_length=1000, required=False, allow_blank=True, default="")
     data = serializers.JSONField()
+    #: One-click «Saqlash»: create and activate together (nothing is created when activation fails).
+    activate = serializers.BooleanField(required=False, default=False)
 
 
 class BlueprintUpdateSerializer(serializers.Serializer):
@@ -118,6 +120,8 @@ class BlueprintUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
     data = serializers.JSONField(required=False)
     comment = serializers.CharField(max_length=500, required=False, allow_blank=True)
+    #: One-click «Saqlash»: an active blueprint is changed immediately (no pending step).
+    apply = serializers.BooleanField(required=False, default=False)
 
 
 class CommentSerializer(serializers.Serializer):

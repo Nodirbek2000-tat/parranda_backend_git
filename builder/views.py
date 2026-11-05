@@ -7,6 +7,7 @@ Access: ``/api/builder/*`` writes — Super Admin only; ``/api/builder/meta`` an
 
 from __future__ import annotations
 
+from django.db import transaction
 from django.db.models import Prefetch, Q, QuerySet
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import status
@@ -157,7 +158,12 @@ class BlueprintListView(_ReadAdminWriteSuper, GenericAPIView):
     def post(self, request: Request) -> Response:
         serializer = BlueprintCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        bp = services.create_blueprint(actor=request.user, **serializer.validated_data)
+        values = dict(serializer.validated_data)
+        activate = values.pop("activate", False)
+        with transaction.atomic():  # activation failure → nothing is created
+            bp = services.create_blueprint(actor=request.user, **values)
+            if activate:
+                services.activate_blueprint(actor=request.user, pk=bp.pk, comment="Yaratildi va faollashtirildi")
         return blueprint_response(request, bp.pk, status.HTTP_201_CREATED)
 
 
@@ -171,7 +177,9 @@ class BlueprintDetailView(_ReadAdminWriteSuper, APIView):
     def patch(self, request: Request, pk: int) -> Response:
         serializer = BlueprintUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        services.update_blueprint(actor=request.user, pk=pk, changes=dict(serializer.validated_data))
+        changes = dict(serializer.validated_data)
+        apply = changes.pop("apply", False)
+        services.update_blueprint(actor=request.user, pk=pk, changes=changes, apply=apply)
         return blueprint_response(request, pk)
 
     @extend_schema(parameters=[ID_PATH], responses={204: None, **ERRORS})
