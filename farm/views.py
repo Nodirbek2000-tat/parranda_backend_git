@@ -11,6 +11,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from builder.access import scope_households
 from common import query
 from common.ids import ID_REGEX
 from common.permissions import IsAdminOrOwnerRole, IsAdminRole, IsOwnerRole, IsRoleIn, ReadOnlyFor
@@ -97,6 +98,7 @@ class HouseholdViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         qs = Household.objects.select_related("owner")
         if role_of(self.request.user) == Role.OWNER:
             qs = qs.filter(owner=self.request.user)
+        qs = scope_households(self.request.user, qs)  # V4 §2 territorial scope (no-op without limits)
         qs = selectors.households_with_counts(qs).order_by("id")
         if self.action != "list":
             return qs

@@ -26,6 +26,8 @@ api_patterns = [
     path("", include("logistics.urls")),
     path("", include("vet.urls")),
     path("", include("reports.urls")),
+    path("", include("builder.urls")),
+    path("", include("acts.urls")),
 ]
 
 # Unknown URLs and unhandled errors also answer in JSON (used when DEBUG is off).

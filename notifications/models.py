@@ -47,6 +47,8 @@ class Notification(models.Model):
     sent_at = models.DateTimeField("Yuborilgan", null=True, blank=True)
     #: Read in the Web App bell (does not change the Telegram delivery status).
     read_at = models.DateTimeField("O‘qilgan", null=True, blank=True)
+    #: V4 §4 delayed delivery: the bot queue skips the row until this moment (null = now).
+    send_after = models.DateTimeField("Yuborish vaqti", null=True, blank=True)
 
     class Meta:
         verbose_name = "Bildirishnoma"
@@ -84,6 +86,13 @@ class NotificationSetting(models.Model):
     #: ``None`` = registry default roles; otherwise a list ⊆ ADMIN, WAREHOUSE, LOGISTICS, VET.
     roles = models.JSONField("Rollar", null=True, blank=True)
     contextual_enabled = models.BooleanField("Kontekst bo‘yicha qabul qiluvchilar", default=True)
+    # API_CONTRACT_V4 §4 (notification constructor).
+    #: Replaces the default body; placeholders ``{title} {code} {household} {due} {role} {text}``.
+    custom_text = models.TextField("Maxsus matn", blank=True, default="")
+    #: "Qachon yuborish": minutes after the event (0 = immediately, max 7 days).
+    delay_minutes = models.PositiveIntegerField("Kechiktirish (daqiqa)", default=0)
+    #: Specific users added to the recipients.
+    extra_user_ids = models.JSONField("Qo‘shimcha qabul qiluvchilar", default=list, blank=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

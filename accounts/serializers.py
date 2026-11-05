@@ -144,6 +144,32 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AccessSerializer(serializers.Serializer):
+    """API_CONTRACT_V4 §2: role profile + scope of the current user (``permissions: null`` = defaults)."""
+
+    profile_id = serializers.IntegerField(allow_null=True)
+    profile_name = serializers.CharField(allow_null=True)
+    permissions = serializers.DictField(child=serializers.ListField(child=serializers.CharField()), allow_null=True)
+    districts = serializers.ListField(child=serializers.CharField())
+    household_ids = serializers.ListField(child=serializers.IntegerField())
+
+
+class MeSerializer(UserSerializer):
+    """``GET /api/auth/me``: :class:`UserSerializer` + ``access`` (V4 §2)."""
+
+    access = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = (*UserSerializer.Meta.fields, "access")
+        read_only_fields = fields
+
+    @extend_schema_field(AccessSerializer)
+    def get_access(self, user: User) -> dict:
+        from builder.access import access_payload
+
+        return access_payload(user)
+
+
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150, trim_whitespace=True)
     password = serializers.CharField(max_length=128, trim_whitespace=False)

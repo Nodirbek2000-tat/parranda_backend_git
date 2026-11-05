@@ -16,14 +16,18 @@ from accounts.serializers import UserRefSerializer
 from common.fields import PrimaryKeyField
 from common.ids import fits_db_int
 from common.roles import Role, role_of
-from farm.models import Household
+from farm.models import Household, PoultryType
 from farm.serializers import HouseholdShortSerializer
 
 from . import lots as lot_reads
 from .models import (
     MAX_AMOUNT,
+    NORM_DAY_MAX,
+    NORM_DAY_MIN,
     OUTGOING_TYPES,
     WHOLE_UNITS,
+    ConstructionOption,
+    FeedNorm,
     InventoryCount,
     InventoryCountLine,
     Product,
@@ -32,6 +36,7 @@ from .models import (
     StockTransaction,
     StockTransactionType,
 )
+from .norms import MSG_OPTION_DUPLICATE
 from .readiness import models_ready
 from .services import MSG_DUPLICATE_NAME
 
@@ -53,6 +58,13 @@ class ProductSerializer(serializers.ModelSerializer):
     available = serializers.DecimalField(max_digits=13, decimal_places=2, read_only=True)
     is_low = serializers.BooleanField(read_only=True)
     nearest_expiry = serializers.SerializerMethodField()
+    # V4 §5: optional catalogue data.
+    price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0, required=False, allow_null=True)
+    consumption_norm = serializers.DecimalField(
+        max_digits=12, decimal_places=3, min_value=0, required=False, allow_null=True
+    )
+    dosage = serializers.CharField(max_length=200, required=False, allow_blank=True, trim_whitespace=True)
+    description = serializers.CharField(max_length=1000, required=False, allow_blank=True, trim_whitespace=True)
 
     class Meta:
         model = Product
@@ -69,6 +81,10 @@ class ProductSerializer(serializers.ModelSerializer):
             "is_low",
             "nearest_expiry",
             "is_active",
+            "price",
+            "consumption_norm",
+            "dosage",
+            "description",
             "created_at",
         )
         read_only_fields = ("id", "balance", "reserved", "available", "is_low", "nearest_expiry", "created_at")
@@ -524,3 +540,87 @@ def stock_files_map(rows) -> dict | None:
     if not attachments_ready():
         return {}
     return files_by_object("StockTransaction", [row.pk for row in rows])
+
+
+# --- V4 §5 feed norms and construction options ---------------------------------------------------
+
+
+class FeedNormSerializer(serializers.ModelSerializer):
+    """``FeedNorm`` (read): ``product`` = ``{"id", "name", "unit"}`` or ``null``."""
+
+    poultry_type_display = serializers.CharField(source="get_poultry_type_display", read_only=True)
+    product = ProductRefSerializer(read_only=True, allow_null=True)
+    grams_per_bird_day = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+
+    class Meta:
+        model = FeedNorm
+        fields = (
+            "id",
+            "code",
+            "poultry_type",
+            "poultry_type_display",
+            "day_from",
+            "day_to",
+            "grams_per_bird_day",
+            "product",
+            "note",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class FeedNormWriteSerializer(serializers.Serializer):
+    """POST (all required except ``product`` / ``note``) and PATCH (partial)."""
+
+    poultry_type = serializers.ChoiceField(choices=PoultryType.choices)
+    day_from = serializers.IntegerField(min_value=NORM_DAY_MIN, max_value=NORM_DAY_MAX)
+    day_to = serializers.IntegerField(min_value=NORM_DAY_MIN, max_value=NORM_DAY_MAX)
+    grams_per_bird_day = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=Decimal("0.01"))
+    product = PrimaryKeyField(
+        queryset=Product.objects.all(),
+        required=False,
+        allow_null=True,
+        error_messages={"does_not_exist": "Mahsulot topilmadi."},
+    )
+    note = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
+
+    def validate_product(self, value: Product | None) -> Product | None:
+        if value is not None and value.category != ProductCategory.FEED:
+            raise serializers.ValidationError("Faqat “Yem” toifasidagi mahsulotni tanlash mumkin.")
+        return value
+
+    def validate(self, attrs: dict) -> dict:
+        if self.partial and "note" not in self.initial_data:
+            attrs.pop("note", None)
+        day_from, day_to = attrs.get("day_from"), attrs.get("day_to")
+        if day_from is not None and day_to is not None and day_from > day_to:
+            raise serializers.ValidationError({"day_to": ["“Kungacha” “Kundan”dan kichik bo‘lmasligi kerak."]})
+        return attrs
+
+
+class ConstructionOptionSerializer(serializers.ModelSerializer):
+    price = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=0, required=False, allow_null=True)
+    name = serializers.CharField(max_length=200)
+    description = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+    unit = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    class Meta:
+        model = ConstructionOption
+        fields = ("id", "code", "name", "description", "unit", "price", "is_active", "created_at", "updated_at")
+        read_only_fields = ("id", "code", "created_at", "updated_at")
+        extra_kwargs = {"is_active": {"required": False}}
+
+    def validate_name(self, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Bu maydon bo‘sh bo‘lishi mumkin emas.")
+        duplicates = ConstructionOption.objects.filter(name__iexact=value)
+        if self.instance is not None:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.exists():
+            raise serializers.ValidationError(MSG_OPTION_DUPLICATE)
+        return value
+
+    def save(self, **kwargs):
+        raise NotImplementedError("Use warehouse.norms (config versions + audit).")

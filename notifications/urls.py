@@ -29,6 +29,16 @@ urlpatterns = [
         web_views.NotificationSettingDetailView.as_view(),
         name="notification-setting-detail",
     ),
+    path(
+        "notification-settings/<str:event>/versions",
+        web_views.NotificationSettingVersionsView.as_view(),
+        name="notification-setting-versions",
+    ),
+    path(
+        "notification-settings/<str:event>/revert",
+        web_views.NotificationSettingRevertView.as_view(),
+        name="notification-setting-revert",
+    ),
     # Bell (any role, own rows)
     path("my/notifications", web_views.MyNotificationListView.as_view(), name="my-notifications"),
     path(

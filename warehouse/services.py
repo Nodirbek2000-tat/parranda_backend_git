@@ -33,6 +33,7 @@ from farm.models import Household
 from notifications import events
 
 from . import events as warehouse_events
+from . import norms
 from .models import (
     ADJUST_TYPES,
     MAX_AMOUNT,
@@ -335,14 +336,16 @@ def apply_adjustment(
 
 
 MSG_DUPLICATE_NAME = "Bu nomdagi mahsulot allaqachon mavjud"
-PRODUCT_EDITABLE_FIELDS = frozenset({"name", "category", "unit", "min_stock", "is_active"})
+PRODUCT_EDITABLE_FIELDS = frozenset(
+    {"name", "category", "unit", "min_stock", "is_active", "price", "consumption_norm", "dosage", "description"}
+)
 
 
 def create_product(*, actor: User | None, data: dict) -> Product:
     try:
         with transaction.atomic():
             product = Product.objects.create(**data)
-            audit.record_create(AuditModule.PRODUCTS, product, actor)
+            norms.record_product_created(product, actor)
     except IntegrityError:
         # A concurrent request created the same (case-insensitive) name first.
         raise ValidationError({"name": [MSG_DUPLICATE_NAME]}) from None
@@ -357,12 +360,12 @@ def update_product(*, actor: User | None, product_id: int, changes: dict) -> Pro
     try:
         with transaction.atomic():
             product = Product.objects.select_for_update().get(pk=product_id)
-            before = audit.snapshot(product)
+            before = norms.product_state(product)
             for field, value in changes.items():
                 setattr(product, field, value)
             if changes:
                 product.save(update_fields=list(changes))
-            audit.record_update(AuditModule.PRODUCTS, product, actor, before)
+            norms.record_product_updated(product, actor, before)
     except IntegrityError:
         raise ValidationError({"name": [MSG_DUPLICATE_NAME]}) from None
     return product

@@ -125,6 +125,22 @@ _DEFS: tuple[EventDef, ...] = (
              "Eslatma: partiyaning yaroqlilik muddati yaqin", (W, A)),
     EventDef("lot_expired", "⛔", "NNP — YAROQLILIK MUDDATI O‘TDI", "Yaroqlilik muddati o‘tdi",
              "Eslatma: partiyaning yaroqlilik muddati o‘tgan, qoldiq bor", (W, A)),
+    # --- Konstruktor (API_CONTRACT_V4 §3.2, §3.3) ------------------------------------------
+    # Role references (``"VET"`` / ``"profile:7"``) are resolved to users by ``builder`` and passed as RESPONSIBLE.
+    EventDef("task_assigned", "📌", "NNP — YANGI VAZIFA", "Yangi vazifa",
+             "Konstruktor vazifasi bajaruvchiga berilganda", (), (RESPONSIBLE, HOUSEHOLD_OWNER)),
+    EventDef("task_submitted", "📨", "NNP — VAZIFA TASDIQQA YUBORILDI", "Vazifa tasdiqqa yuborildi",
+             "Bajaruvchi vazifani topshirganda (tasdiqlovchiga)", (), (RESPONSIBLE,)),
+    EventDef("task_approved", "✅", "NNP — VAZIFA TASDIQLANDI", "Vazifa tasdiqlandi",
+             "Vazifa tasdiqlanganda (bajaruvchiga)", (), (RESPONSIBLE,)),
+    EventDef("task_returned", "↩️", "NNP — VAZIFA QAYTARILDI", "Vazifa qaytarildi",
+             "Vazifa qayta ishlashga qaytarilganda (bajaruvchiga)", (), (RESPONSIBLE,)),
+    EventDef("process_stage_started", "▶️", "NNP — JARAYON BOSQICHI BOSHLANDI", "Jarayon bosqichi boshlandi",
+             "Jarayonning keyingi bosqichi boshlanganda (bosqichda belgilangan rollarga)", (), (RESPONSIBLE,)),
+    EventDef("process_finished", "🏁", "NNP — JARAYON YAKUNLANDI", "Jarayon yakunlandi",
+             "Jarayonning oxirgi bosqichi bajarilganda", (A,)),
+    EventDef("process_blocked", "⛔", "NNP — JARAYON TO‘XTAB QOLDI", "Jarayon to‘xtab qoldi",
+             "Keyingi bosqich vazifa shabloni arxivlangan yoki topilmaganda", (A,)),
 )
 
 #: Registry order = order of the settings table in the Web App.

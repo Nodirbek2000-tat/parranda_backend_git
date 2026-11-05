@@ -17,9 +17,13 @@ from common.schema import DATE_FROM, DATE_TO, ERROR_400, query as query_param
 from stats import services as stats_services
 from stats.schema import PERIOD_PARAMETERS, ProductStatsSerializer
 
-from . import inventory, services
+from farm.models import PoultryType
+
+from . import inventory, norms, services
 from . import lots as lot_reads
 from .models import (
+    ConstructionOption,
+    FeedNorm,
     InventoryCount,
     InventoryCountLine,
     InventoryCountStatus,
@@ -31,6 +35,9 @@ from .models import (
     returned_task_out,
 )
 from .serializers import (
+    ConstructionOptionSerializer,
+    FeedNormSerializer,
+    FeedNormWriteSerializer,
     InventoryCancelSerializer,
     InventoryCountCreateSerializer,
     InventoryCountSerializer,
@@ -342,3 +349,102 @@ class InventoryCountViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         inventory.cancel(actor=request.user, count_id=int(pk), reason=serializer.validated_data["reason"])
         return self._detail(pk)
+
+
+# --- V4 §5 feed norms and construction options ---------------------------------------------------
+
+#: Read A, W, V; write ADMIN (Super Admin included).
+NormAccess = IsRoleIn(Role.ADMIN) | ReadOnlyFor(Role.WAREHOUSE, Role.VET)
+
+
+@extend_schema_view(
+    list=extend_schema(parameters=[query_param("poultry_type", enum=PoultryType.values)]),
+    create=extend_schema(request=FeedNormWriteSerializer, responses={201: FeedNormSerializer, 400: ERROR_400}),
+    partial_update=extend_schema(request=FeedNormWriteSerializer, responses={200: FeedNormSerializer, 400: ERROR_400}),
+    destroy=extend_schema(responses={204: None}),
+)
+class FeedNormViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet
+):
+    """``/api/feed-norms`` (V4 §5): grams of feed per bird per day by age range."""
+
+    serializer_class = FeedNormSerializer
+    permission_classes = [NormAccess]
+    lookup_value_regex = ID_REGEX
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self) -> QuerySet[FeedNorm]:
+        qs = FeedNorm.objects.select_related("product").order_by("poultry_type", "day_from", "id")
+        poultry_type = query.get_choice(self.request, "poultry_type", PoultryType)
+        if poultry_type:
+            qs = qs.filter(poultry_type=poultry_type)
+        return qs
+
+    def create(self, request: Request) -> Response:
+        serializer = FeedNormWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        norm = norms.create_feed_norm(actor=request.user, data=dict(serializer.validated_data))
+        return Response(FeedNormSerializer(norm).data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request: Request, pk: str | None = None) -> Response:
+        norm = self.get_object()
+        serializer = FeedNormWriteSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        norm = norms.update_feed_norm(actor=request.user, norm_id=norm.pk, changes=dict(serializer.validated_data))
+        return Response(FeedNormSerializer(norm).data)
+
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        norm = self.get_object()
+        norms.delete_feed_norm(actor=request.user, norm_id=norm.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema_view(
+    list=extend_schema(parameters=[query_param("search"), query_param("is_active", bool)]),
+    create=extend_schema(
+        request=ConstructionOptionSerializer, responses={201: ConstructionOptionSerializer, 400: ERROR_400}
+    ),
+    partial_update=extend_schema(
+        request=ConstructionOptionSerializer, responses={200: ConstructionOptionSerializer, 400: ERROR_400}
+    ),
+    destroy=extend_schema(responses={204: None}),
+)
+class ConstructionOptionViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet
+):
+    """``/api/construction-options`` (V4 §5): construction catalogue."""
+
+    serializer_class = ConstructionOptionSerializer
+    permission_classes = [NormAccess]
+    lookup_value_regex = ID_REGEX
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self) -> QuerySet[ConstructionOption]:
+        qs = ConstructionOption.objects.order_by("name", "id")
+        search = query.get_str(self.request, "search")
+        if search:
+            qs = qs.filter(name__icontains=search)
+        is_active = query.get_bool(self.request, "is_active")
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active)
+        return qs
+
+    def create(self, request: Request) -> Response:
+        serializer = ConstructionOptionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        option = norms.create_construction_option(actor=request.user, data=dict(serializer.validated_data))
+        return Response(ConstructionOptionSerializer(option).data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request: Request, pk: str | None = None) -> Response:
+        option = self.get_object()
+        serializer = ConstructionOptionSerializer(option, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        option = norms.update_construction_option(
+            actor=request.user, option_id=option.pk, changes=dict(serializer.validated_data)
+        )
+        return Response(ConstructionOptionSerializer(option).data)
+
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        option = self.get_object()
+        norms.delete_construction_option(actor=request.user, option_id=option.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)

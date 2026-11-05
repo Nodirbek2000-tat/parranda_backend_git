@@ -25,6 +25,8 @@ from common.periods import day_range
 from common.permissions import IsAdminRole, IsAuthenticatedRole, IsSuperAdmin
 from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_403, ERROR_404, query as query_param
 
+from builder.serializers import MSG_VERSION_NOT_FOUND, ConfigVersionSerializer, RevertSerializer
+
 from . import registry, services
 from .models import Notification, NotificationStatus
 from .serializers import (
@@ -232,9 +234,55 @@ class NotificationSettingDetailView(APIView):
             raise NotFound(translate_message("Not found."))
         serializer = NotificationSettingUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        row = services.update_setting(event, dict(serializer.validated_data), actor=request.user)
-        row = type(row).objects.select_related("updated_by").get(pk=row.pk)
-        return Response(NotificationSettingSerializer(NotificationSettingSerializer.build(registry.get(event), row)).data)
+        changes = dict(serializer.validated_data)
+        comment = changes.pop("comment", "")
+        row = services.update_setting(event, changes, actor=request.user, comment=comment)
+        return _setting_response(event, row)
+
+
+def _setting_response(event: str, row) -> Response:
+    row = type(row).objects.select_related("updated_by").get(pk=row.pk)
+    return Response(NotificationSettingSerializer(NotificationSettingSerializer.build(registry.get(event), row)).data)
+
+
+def _known_event(event: str) -> None:
+    if event not in registry.EVENTS:
+        raise NotFound(translate_message("Not found."))
+
+
+class NotificationSettingVersionsView(APIView):
+    """``GET /api/notification-settings/{event}/versions`` (V4 §4), newest first."""
+
+    permission_classes = [IsAdminRole, IsSuperAdmin]
+
+    @extend_schema(
+        parameters=[OpenApiParameter("event", str, OpenApiParameter.PATH)],
+        responses={200: ConfigVersionSerializer(many=True), 403: ERROR_403, 404: ERROR_404},
+    )
+    def get(self, request: Request, event: str) -> Response:
+        _known_event(event)
+        return Response(ConfigVersionSerializer(services.setting_versions(event), many=True).data)
+
+
+class NotificationSettingRevertView(APIView):
+    """``POST /api/notification-settings/{event}/revert {version}`` (V4 §4): applies that state as a new version."""
+
+    permission_classes = [IsAdminRole, IsSuperAdmin]
+
+    @extend_schema(
+        parameters=[OpenApiParameter("event", str, OpenApiParameter.PATH)],
+        request=RevertSerializer,
+        responses={200: NotificationSettingSerializer, 400: ERROR_400, 403: ERROR_403, 404: ERROR_404},
+    )
+    def post(self, request: Request, event: str) -> Response:
+        _known_event(event)
+        serializer = RevertSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            row = services.revert_setting(event, serializer.validated_data["version"], actor=request.user)
+        except LookupError:
+            raise ValidationError({"version": [MSG_VERSION_NOT_FOUND]}) from None
+        return _setting_response(event, row)
 
 
 # --- My notifications (bell) -----------------------------------------------------------------

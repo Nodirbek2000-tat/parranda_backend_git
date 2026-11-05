@@ -108,7 +108,9 @@ class SettingsApiTests(BaseAPITestCase):
             {"event": "order_created", "display": "Yangi buyurtma berildi",
              "description": "Xonadon egasi buyurtma yoki talab yuborganda", "enabled": True,
              "telegram_enabled": True, "default_roles": ["ADMIN"], "roles": ["ADMIN"], "roles_overridden": False,
-             "contextual": [], "contextual_enabled": True, "updated_by": None, "updated_at": None},
+             "contextual": [], "contextual_enabled": True, "updated_by": None, "updated_at": None,
+             # V4 §4 notification constructor
+             "custom_text": "", "delay_minutes": 0, "extra_user_ids": []},
         )
         self.login_as(self.warehouse)
         self.assertEqual(self.client.get("/api/notification-settings").status_code, 403)

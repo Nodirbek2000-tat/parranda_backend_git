@@ -29,6 +29,7 @@ import logging
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from functools import partial
 
 from django.db import transaction
@@ -100,6 +101,10 @@ class EventSettings:
     roles: tuple[str, ...] = ()
     contextual_enabled: bool = True
     overridden: bool = field(default=False)
+    # V4 §4
+    custom_text: str = ""
+    delay_minutes: int = 0
+    extra_user_ids: tuple[int, ...] = ()
 
 
 def effective_settings(event: str) -> EventSettings:
@@ -110,6 +115,9 @@ def effective_settings(event: str) -> EventSettings:
         result.enabled = row.enabled
         result.telegram_enabled = row.telegram_enabled
         result.contextual_enabled = row.contextual_enabled
+        result.custom_text = row.custom_text or ""
+        result.delay_minutes = row.delay_minutes or 0
+        result.extra_user_ids = tuple(pk for pk in (row.extra_user_ids or []) if isinstance(pk, int))
         if row.roles is not None:
             result.roles = tuple(role for role in row.roles if role in NOTIFIABLE_ROLES)
             result.overridden = True
@@ -132,6 +140,30 @@ def plain_body(text: str) -> str:
     if lines:
         lines = lines[1:]  # the title line
     return "\n".join(lines).strip()
+
+
+_PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+PLACEHOLDER_NAMES = ("title", "code", "household", "due", "role", "text")
+
+
+def apply_custom_text(definition: registry.EventDef, text: str, custom: str, values: Mapping[str, object]) -> str:
+    """V4 §4: ``custom_text`` replaces the default body (title line kept). Unknown placeholders stay literal.
+
+    Values are HTML-escaped; ``{text}`` is the default body exactly as composed (already Telegram HTML).
+    """
+    head, _, default_body = text.partition("\n")
+    default_body = default_body.strip("\n")
+
+    def substitute(match: re.Match) -> str:
+        name = match.group(1)
+        if name == "text":
+            return default_body
+        if name in values and name in PLACEHOLDER_NAMES:
+            return html.escape(str(values[name] if values[name] is not None else ""), quote=False)
+        return match.group(0)
+
+    escaped = html.escape(custom, quote=False)
+    return f"{head or definition.title_html}\n\n{_PLACEHOLDER_RE.sub(substitute, escaped)}"
 
 
 # --- Queueing --------------------------------------------------------------------------------
@@ -157,6 +189,12 @@ CONTEXTUAL_ROLES = {
 }
 
 
+#: Konstruktor events (V4 §3): recipients are configured role references, i.e. any role.
+BUILDER_EVENTS = frozenset(
+    {"task_assigned", "task_submitted", "task_approved", "task_returned", "process_stage_started"}
+)
+
+
 def events_for_role(role: str) -> list[registry.EventDef]:
     """Events a user of ``role`` may receive (default / Super Admin roles, fallback or contextual)."""
     result = []
@@ -165,6 +203,8 @@ def events_for_role(role: str) -> list[registry.EventDef]:
         roles = set(config.roles) | set(definition.fallback_roles)
         for name in definition.contextual:
             roles |= CONTEXTUAL_ROLES.get(name, set())
+        if definition.key in BUILDER_EVENTS:  # configurable executors/approvers: any role may receive them
+            roles |= set(Role.values)
         if role in roles:
             result.append(definition)
     return result
@@ -204,11 +244,14 @@ def notify(
     include_roles: bool = True,
     object_type: str = "",
     object_id: int | None = None,
+    placeholders: Mapping[str, object] | None = None,
 ) -> list[Notification]:
     """Create the rows of one event now (normally called through :func:`notify_on_commit`).
 
     Idempotent: ``event_key = f"{event}:{key}:{user_id}"`` is unique, a replay creates nothing.
     ``include_roles=False`` sends only to the contextual users (e.g. ``user_created`` for a new owner).
+    V4 §4: the Super Admin's ``custom_text`` (``placeholders`` fill ``{title} {code} {household} {due} {role}``),
+    ``delay_minutes`` (→ ``send_after``) and ``extra_user_ids`` are applied here.
     """
     definition = registry.get(event)
     config = effective_settings(event)
@@ -232,7 +275,7 @@ def notify(
     if not contextual_ids and definition.fallback_roles:
         roles.extend(definition.fallback_roles)
 
-    condition = Q(pk__in=list(contextual_ids))
+    condition = Q(pk__in=list(contextual_ids)) | Q(pk__in=list(config.extra_user_ids), deleted_at__isnull=True)
     if roles:
         condition |= role_users_q(roles)
     recipients = list(User.objects.filter(condition, is_active=True).order_by("id"))
@@ -243,6 +286,12 @@ def notify(
     recipients = [user for user in recipients if prefs.get(user.pk, (True, True))[0]]
     if not recipients:
         return []
+
+    if config.custom_text.strip():
+        values = {"title": definition.display, "code": related_op, "household": "", "due": "", "role": ""}
+        values.update(placeholders or {})
+        text = apply_custom_text(definition, text, config.custom_text, values)
+    send_after = timezone.now() + timedelta(minutes=config.delay_minutes) if config.delay_minutes else None
 
     keys = {user.pk: f"{event}:{key}:{user.pk}" for user in recipients}
     existing = set(Notification.objects.filter(event_key__in=keys.values()).values_list("event_key", flat=True))
@@ -275,6 +324,7 @@ def notify(
                 object_type=object_type,
                 object_id=object_id,
                 status=NotificationStatus.PENDING if telegram else NotificationStatus.SKIPPED,
+                send_after=send_after,
             )
         )
     # ignore_conflicts: a concurrent replay of the same event cannot fail the commit hook.
@@ -308,7 +358,9 @@ def notify_on_commit(event: str, **kwargs) -> None:
 def pending(limit: int = PENDING_LIMIT_DEFAULT) -> QuerySet[Notification]:
     limit = max(1, min(limit, PENDING_LIMIT_MAX))
     return Notification.objects.filter(
-        status=NotificationStatus.PENDING, attempts__lt=Notification.MAX_ATTEMPTS
+        Q(send_after__isnull=True) | Q(send_after__lte=timezone.now()),
+        status=NotificationStatus.PENDING,
+        attempts__lt=Notification.MAX_ATTEMPTS,
     ).order_by("id")[:limit]
 
 
@@ -421,7 +473,16 @@ def retry_failed(*, actor: User, event: str = "", date_from=None, date_to=None) 
 
 # --- Notification settings (API_CONTRACT_V3 §9.3) --------------------------------------------
 
-SETTING_FIELDS = ("enabled", "telegram_enabled", "roles", "contextual_enabled")
+SETTING_FIELDS = (
+    "enabled", "telegram_enabled", "roles", "contextual_enabled", "custom_text", "delay_minutes", "extra_user_ids",
+)
+#: ``ConfigVersion.object_type`` of notification settings (V4 §4).
+CONFIG_OBJECT_TYPE = "notification_setting"
+
+
+def setting_state(row: NotificationSetting) -> dict:
+    """Full editable state of a setting (the ``ConfigVersion.data`` snapshot)."""
+    return {name: getattr(row, name) for name in SETTING_FIELDS}
 
 
 def settings_rows() -> list[tuple[registry.EventDef, NotificationSetting | None]]:
@@ -430,8 +491,12 @@ def settings_rows() -> list[tuple[registry.EventDef, NotificationSetting | None]
     return [(definition, rows.get(key)) for key, definition in registry.EVENTS.items()]
 
 
-def update_setting(event: str, changes: dict, *, actor: User) -> NotificationSetting:
-    """Super Admin switch change (``KeyError`` for an unknown event → 404). Audit ``notifications / update``."""
+def update_setting(event: str, changes: dict, *, actor: User, comment: str = "") -> NotificationSetting:
+    """Super Admin switch change (``KeyError`` for an unknown event → 404). Audit ``notifications / update``.
+
+    Every call writes a ``builder.ConfigVersion`` (V4 §4) with the full state after the change.
+    """
+    from builder.services import write_config_version
     from audit import services as audit
     from audit.models import AuditAction, AuditModule
 
@@ -456,7 +521,31 @@ def update_setting(event: str, changes: dict, *, actor: User) -> NotificationSet
                 before=old,
                 after=new,
             )
+        write_config_version(
+            CONFIG_OBJECT_TYPE, row.pk, name=event, data=setting_state(row), actor=actor, comment=comment
+        )
     return row
+
+
+def setting_versions(event: str):
+    """``ConfigVersion`` rows of ``event`` newest first (empty when the setting was never changed)."""
+    from builder.models import ConfigVersion
+
+    row = NotificationSetting.objects.filter(event=event).first()
+    if row is None:
+        return ConfigVersion.objects.none()
+    return ConfigVersion.objects.filter(object_type=CONFIG_OBJECT_TYPE, object_id=row.pk).select_related(
+        "created_by"
+    ).order_by("-version")
+
+
+def revert_setting(event: str, version: int, *, actor: User) -> NotificationSetting:
+    """Apply the state of ``version`` again (a new version is written). ``LookupError`` → 400."""
+    snapshot = setting_versions(event).filter(version=version).first()
+    if snapshot is None:
+        raise LookupError(version)
+    changes = {name: snapshot.data[name] for name in SETTING_FIELDS if name in snapshot.data}
+    return update_setting(event, changes, actor=actor, comment=f"{version}-versiyaga qaytarildi")
 
 
 # --- My notifications / bell (API_CONTRACT_V3 §9.6) ------------------------------------------

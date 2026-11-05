@@ -27,6 +27,7 @@ from .serializers import (
     EndSessionsSerializer,
     LoginSerializer,
     LogoutSerializer,
+    MeSerializer,
     RefreshSerializer,
     TelegramAuthSerializer,
     UserCreateSerializer,
@@ -136,10 +137,10 @@ class RefreshView(TokenRefreshView):
 class MeView(APIView):
     permission_classes = [IsAuthenticatedRole]
 
-    @extend_schema(responses=UserSerializer)
+    @extend_schema(responses=MeSerializer)
     def get(self, request: Request) -> Response:
         user = user_queryset().get(pk=request.user.pk)
-        return Response(UserSerializer(user).data)
+        return Response(MeSerializer(user).data)
 
 
 class LogoutView(APIView):

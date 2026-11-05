@@ -7,6 +7,8 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.functions import Lower
 
+from farm.models import PoultryType
+
 
 class ProductCategory(models.TextChoices):
     FEED = "FEED", "Yem"
@@ -46,6 +48,13 @@ class Product(models.Model):
         "Zaxiralangan", max_digits=12, decimal_places=2, default=Decimal("0"), editable=False
     )
     is_active = models.BooleanField("Faol", default=True)
+    # V4 §5 (TZ §5): catalogue data for norms, medicine catalogue and cost estimates.
+    price = models.DecimalField("Narx (so‘m)", max_digits=14, decimal_places=2, null=True, blank=True)
+    consumption_norm = models.DecimalField(
+        "Sarf me’yori (1 parrandaga)", max_digits=12, decimal_places=3, null=True, blank=True
+    )
+    dosage = models.CharField("Doza / qo‘llash", max_length=200, blank=True, default="")
+    description = models.CharField("Tavsif", max_length=1000, blank=True, default="")
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
 
     class Meta:
@@ -59,6 +68,11 @@ class Product(models.Model):
             models.CheckConstraint(condition=Q(balance__gte=0), name="product_balance_gte_0"),
             models.CheckConstraint(condition=Q(reserved__gte=0), name="product_reserved_gte_0"),
             models.CheckConstraint(condition=Q(reserved__lte=F("balance")), name="product_reserved_lte_balance"),
+            models.CheckConstraint(condition=Q(price__isnull=True) | Q(price__gte=0), name="product_price_gte_0"),
+            models.CheckConstraint(
+                condition=Q(consumption_norm__isnull=True) | Q(consumption_norm__gte=0),
+                name="product_consumption_norm_gte_0",
+            ),
         ]
 
     @property
@@ -315,3 +329,80 @@ def returned_task_out() -> Q:
             )
         )
     )
+
+
+# --- V4 §5 norms and construction catalogue ------------------------------------------------------
+
+#: Bird age range of a feed norm (days).
+NORM_DAY_MIN = 1
+NORM_DAY_MAX = 400
+
+
+class FeedNorm(models.Model):
+    """Feed per bird per day for an age range of one poultry type (ranges of a type never overlap)."""
+
+    poultry_type = models.CharField("Parranda turi", max_length=16, choices=PoultryType.choices)
+    day_from = models.PositiveSmallIntegerField("Kundan")
+    day_to = models.PositiveSmallIntegerField("Kungacha")
+    grams_per_bird_day = models.DecimalField("Gramm (1 parranda / kun)", max_digits=8, decimal_places=2)
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name="feed_norms",
+        null=True,
+        blank=True,
+        limit_choices_to={"category": ProductCategory.FEED},
+        verbose_name="Yem",
+    )
+    note = models.CharField("Izoh", max_length=500, blank=True, default="")
+    created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    updated_at = models.DateTimeField("O‘zgartirilgan", auto_now=True)
+
+    class Meta:
+        verbose_name = "Yem me’yori"
+        verbose_name_plural = "Yem me’yorlari"
+        ordering = ("poultry_type", "day_from", "id")
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(day_from__gte=NORM_DAY_MIN, day_to__lte=NORM_DAY_MAX, day_from__lte=F("day_to")),
+                name="feed_norm_day_range",
+            ),
+            models.CheckConstraint(condition=Q(grams_per_bird_day__gt=0), name="feed_norm_grams_gt_0"),
+        ]
+
+    @property
+    def code(self) -> str:
+        return f"YM-{self.pk:06d}" if self.pk else ""
+
+    def __str__(self) -> str:
+        return f"{self.get_poultry_type_display()}: {self.day_from}–{self.day_to} kun"
+
+
+class ConstructionOption(models.Model):
+    """Catalogue entry for poultry house construction (TZ §5 "Qurilish variantlari")."""
+
+    name = models.CharField("Nomi", max_length=200)
+    description = models.CharField("Tavsif", max_length=1000, blank=True, default="")
+    unit = models.CharField("O‘lchov birligi", max_length=32, blank=True, default="")
+    price = models.DecimalField("Narx (so‘m)", max_digits=14, decimal_places=2, null=True, blank=True)
+    is_active = models.BooleanField("Faol", default=True)
+    created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    updated_at = models.DateTimeField("O‘zgartirilgan", auto_now=True)
+
+    class Meta:
+        verbose_name = "Qurilish varianti"
+        verbose_name_plural = "Qurilish variantlari"
+        ordering = ("name", "id")
+        constraints = [
+            models.UniqueConstraint(Lower("name"), name="construction_option_name_ci_unique"),
+            models.CheckConstraint(
+                condition=Q(price__isnull=True) | Q(price__gte=0), name="construction_option_price_gte_0"
+            ),
+        ]
+
+    @property
+    def code(self) -> str:
+        return f"QV-{self.pk:06d}" if self.pk else ""
+
+    def __str__(self) -> str:
+        return self.name

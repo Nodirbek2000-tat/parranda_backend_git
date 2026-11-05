@@ -26,6 +26,9 @@ class AuditModule(models.TextChoices):
     SETTINGS = "settings", "Sozlamalar"
     NOTIFICATIONS = "notifications", "Bildirishnomalar"
     REPORTS = "reports", "Hisobotlar"
+    # V4 (API_CONTRACT_V4)
+    BUILDER = "builder", "Konstruktor"
+    ACTS = "acts", "Dalolatnomalar"
 
 
 class AuditAction(models.TextChoices):
@@ -79,6 +82,13 @@ class AuditObjectType(models.TextChoices):
     NOTIFICATION = "Notification", "Bildirishnoma"
     NOTIFICATION_PREFERENCE = "NotificationPreference", "Shaxsiy bildirishnoma sozlamasi"
     REPORT = "Report", "Hisobot"
+    # V4 (API_CONTRACT_V4)
+    BLUEPRINT = "Blueprint", "Konstruktor obyekti"
+    TASK = "TaskInstance", "Vazifa"
+    PROCESS_RUN = "ProcessRun", "Jarayon"
+    FORM_SUBMISSION = "FormSubmission", "Forma ma’lumoti"
+    USER_ACCESS = "UserAccess", "Foydalanuvchi vakolati"
+    ACT = "Act", "Dalolatnoma"
 
 
 class AuditStatus(models.TextChoices):

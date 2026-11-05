@@ -63,6 +63,9 @@ INSTALLED_APPS = [
     "logistics",
     "vet",
     "reports",
+    # V4 (API_CONTRACT_V4): Konstruktor + dalolatnomalar.
+    "builder",
+    "acts",
 ]
 
 MIDDLEWARE = [
@@ -72,6 +75,8 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # V4 §2: role profiles narrow what the base role may do (403 before the view).
+    "builder.middleware.AccessProfileMiddleware",
     # Source (API / BOT / ADMIN) and client IP of the request for audit rows.
     "audit.middleware.AuditContextMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -213,6 +218,10 @@ SPECTACULAR_SETTINGS = {
         "DeliveryStatusEnum": [("SENT", "SENT"), ("PENDING", "PENDING"), ("FAILED", "FAILED")],
         "NotificationStatusEnum": "notifications.models.NotificationStatus",
         "AttachmentPurposeEnum": "core.models.AttachmentPurpose",
+        # V4 Konstruktor
+        "BlueprintKindEnum": "builder.models.BlueprintKind",
+        "BlueprintStatusEnum": "builder.models.BlueprintStatus",
+        "ActKindEnum": "acts.models.ActKind",
     },
 }
 

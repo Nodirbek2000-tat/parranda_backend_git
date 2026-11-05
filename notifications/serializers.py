@@ -10,6 +10,9 @@ from common.roles import NOTIFIABLE_ROLES, STAFF_ROLE_CHOICES
 from . import registry
 from .models import Notification
 
+#: ``delay_minutes`` upper bound: 7 days (V4 §4).
+MAX_DELAY_MINUTES = 10080
+
 
 class RecipientSerializer(serializers.Serializer):
     id = serializers.IntegerField()
@@ -86,6 +89,9 @@ class NotificationSettingSerializer(serializers.Serializer):
     roles_overridden = serializers.BooleanField()
     contextual = serializers.ListField(child=serializers.CharField())
     contextual_enabled = serializers.BooleanField()
+    custom_text = serializers.CharField(allow_blank=True)
+    delay_minutes = serializers.IntegerField()
+    extra_user_ids = serializers.ListField(child=serializers.IntegerField())
     updated_by = UserRefSerializer(allow_null=True)
     updated_at = serializers.DateTimeField(allow_null=True)
 
@@ -103,6 +109,9 @@ class NotificationSettingSerializer(serializers.Serializer):
             "roles_overridden": overridden,
             "contextual": list(definition.contextual),
             "contextual_enabled": row.contextual_enabled if row is not None else True,
+            "custom_text": row.custom_text if row is not None else "",
+            "delay_minutes": row.delay_minutes if row is not None else 0,
+            "extra_user_ids": list(row.extra_user_ids or []) if row is not None else [],
             "updated_by": row.updated_by if row is not None else None,
             "updated_at": row.updated_at if row is not None else None,
         }
@@ -115,6 +124,22 @@ class NotificationSettingUpdateSerializer(serializers.Serializer):
         child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES), required=False, allow_null=True, max_length=4
     )
     contextual_enabled = serializers.BooleanField(required=False)
+    # V4 §4
+    custom_text = serializers.CharField(required=False, allow_blank=True, max_length=2000, trim_whitespace=False)
+    delay_minutes = serializers.IntegerField(required=False, min_value=0, max_value=MAX_DELAY_MINUTES)
+    extra_user_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1, max_value=2**63 - 1), required=False, max_length=50
+    )
+    comment = serializers.CharField(required=False, allow_blank=True, max_length=500, default="")
+
+    def validate_extra_user_ids(self, value):
+        from accounts.models import User
+
+        ids = list(dict.fromkeys(value))
+        found = set(User.objects.filter(pk__in=ids, deleted_at__isnull=True).values_list("pk", flat=True))
+        if len(found) != len(ids):
+            raise serializers.ValidationError("Tanlangan foydalanuvchi topilmadi.")
+        return ids
 
     def validate_roles(self, value):
         if value is None:

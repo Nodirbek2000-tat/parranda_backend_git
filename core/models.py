@@ -74,6 +74,8 @@ class AttachmentPurpose(models.TextChoices):
     VET_REQUEST = "VET_REQUEST", "Murojaat rasmi"
     # TZ §7 "Har bir kirim va chiqim tegishli hujjat bilan tasdiqlansin": waybill / invoice scan.
     STOCK_DOCUMENT = "STOCK_DOCUMENT", "Ombor hujjati"
+    # API_CONTRACT_V4 §1.2: file / photo values of dynamic forms.
+    FORM_FILE = "FORM_FILE", "Forma fayli"
 
 
 def attachment_upload_to(instance: Attachment, filename: str) -> str:

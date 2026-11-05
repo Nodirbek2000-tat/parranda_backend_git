@@ -34,7 +34,7 @@ from accounts.models import User
 from audit import services as audit
 from audit.models import AuditAction, AuditModule
 from common.permissions import MSG_NO_PERMISSION
-from common.roles import Role, role_of
+from common.roles import ALL_ROLES, Role, role_of
 
 from .models import Attachment, AttachmentPurpose
 
@@ -77,6 +77,8 @@ PURPOSE_ROLES: dict[str, frozenset[str]] = {
     AttachmentPurpose.TREATMENT: frozenset({Role.ADMIN, Role.VET}),
     AttachmentPurpose.VET_REQUEST: frozenset({Role.OWNER}),
     AttachmentPurpose.STOCK_DOCUMENT: frozenset({Role.ADMIN, Role.WAREHOUSE}),
+    # V4 §1.2: anyone who may fill a dynamic form (form roles are checked when the submission binds it).
+    AttachmentPurpose.FORM_FILE: frozenset(ALL_ROLES),
 }
 
 #: Staff roles that see files bound to an object of this type (§4.4); the household owner sees them too.
@@ -260,10 +262,12 @@ def bind_files(
     purpose: str | Iterable[str],
     obj: models.Model,
     household: Any = None,
+    object_type: str | None = None,
 ) -> list[Attachment]:
     """Attach unbound uploads of ``actor`` to ``obj`` exactly once. Call inside the business transaction.
 
-    ``household`` defaults to ``obj.household`` (owner visibility). Raises the §4.3 ``400`` otherwise.
+    ``household`` defaults to ``obj.household`` (owner visibility); ``object_type`` to the model class name.
+    Raises the §4.3 ``400`` otherwise.
     """
     ids = sorted({int(pk) for pk in file_ids})
     if not ids:
@@ -284,7 +288,7 @@ def bind_files(
     ):
         raise ValidationError({"file_ids": [MSG_BIND]})
     now = timezone.now()
-    object_type = object_type_of(obj)
+    object_type = object_type or object_type_of(obj)
     Attachment.objects.filter(id__in=ids).update(
         object_type=object_type, object_id=obj.pk, household=household, bound_at=now
     )
