@@ -7,7 +7,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, inline_seri
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.request import Request
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -135,6 +135,9 @@ class HouseholdViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         return HouseholdSerializer(household).data
 
     def create(self, request: Request) -> Response:
+        # Client rule: a new household is registered only by an ordinary Administrator, not the Super Admin.
+        if request.user.is_superuser:
+            raise PermissionDenied("Yangi xonadonni faqat Administrator qo‘shadi.")
         serializer = HouseholdCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         household, password = services.create_household(

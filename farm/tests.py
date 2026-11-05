@@ -6,10 +6,10 @@ from django.utils import timezone
 
 from accounts.models import User
 from common.roles import Role
-from common.testing import BaseAPITestCase
+from common.testing import BaseAPITestCase, make_user
 
 from . import selectors
-from .models import DailyReport, MovementType, PoultryMovement
+from .models import DailyReport, Household, MovementType, PoultryMovement
 
 
 class HouseholdTests(BaseAPITestCase):
@@ -56,6 +56,14 @@ class HouseholdTests(BaseAPITestCase):
         response = self.client.post("/api/households", {**self.payload, "owner_username": "owner_a"}, format="json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["owner_username"], ["Bu login band"])
+
+    def test_super_admin_cannot_create_household(self):
+        boss = make_user("boss_super", Role.ADMIN, is_superuser=True, is_staff=True)
+        self.login_as(boss)
+        response = self.client.post("/api/households", self.payload, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("faqat Administrator", str(response.data["detail"]))
+        self.assertFalse(Household.objects.filter(name=self.payload["name"]).exists())
 
     def test_only_admin_creates_or_updates(self):
         self.login_as(self.warehouse)
