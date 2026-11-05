@@ -13,6 +13,8 @@ from django.db import models
 from django.db.models import Q
 from django.db.models.functions import Lower
 
+from common.softdelete import SoftDeleteManager
+
 
 class TaskStatus(models.TextChoices):
     NEW = "NEW", "Yangi"
@@ -54,6 +56,11 @@ class Vehicle(models.Model):
     is_active = models.BooleanField("Faol", default=True)
     note = models.CharField("Izoh", max_length=500, blank=True)
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    #: Soft delete (``logistics.services.delete_vehicle``): hidden by ``objects``, kept for task history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Transport vositasi"
@@ -85,6 +92,11 @@ class Driver(models.Model):
     is_active = models.BooleanField("Faol", default=True)
     note = models.CharField("Izoh", max_length=500, blank=True)
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    #: Soft delete (``logistics.services.delete_driver``): hidden by ``objects``, kept for task history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Haydovchi"

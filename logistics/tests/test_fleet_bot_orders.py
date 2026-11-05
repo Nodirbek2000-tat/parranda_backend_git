@@ -39,7 +39,8 @@ class VehicleDriverTests(LogisticsTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.data["is_active"])
         self.assertEqual(self.client.get("/api/logistics/vehicles?is_active=1").data["count"], 1)
-        self.assertEqual(self.client.delete(f"/api/logistics/vehicles/{self.vehicle.pk}").status_code, 405)
+        # DELETE exists now (soft delete), but a vehicle on a not-finished task is refused.
+        self.assertEqual(self.client.delete(f"/api/logistics/vehicles/{self.vehicle.pk}").status_code, 409)
 
     def test_fleet_roles(self):
         for user, read, write in ((self.admin, 200, 201), (self.logist, 200, 201), (self.warehouse, 200, 403),

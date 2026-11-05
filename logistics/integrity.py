@@ -32,7 +32,7 @@ def problems() -> list[str]:
     )
     for row in rows:
         reserved[row["product_id"]] = row["total"] or ZERO
-    for product in Product.objects.only("id", "name", "reserved").order_by("id"):
+    for product in Product.all_objects.only("id", "name", "reserved").order_by("id"):
         expected = reserved.get(product.pk, ZERO)
         if product.reserved != expected:
             found.append(

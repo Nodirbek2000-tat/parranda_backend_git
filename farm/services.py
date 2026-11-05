@@ -18,8 +18,9 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from accounts import services as account_services
 from accounts.models import User
 from audit import services as audit
-from audit.models import AuditModule
+from audit.models import AuditAction, AuditModule
 from common.roles import Role, role_of
+from common.softdelete import InUse
 from notifications import events
 
 from . import selectors
@@ -132,6 +133,59 @@ def update_household(household: Household, changes: dict, *, actor: User | None 
             household.save(update_fields=[*changes, "updated_at"])
         audit.record_update(AuditModule.HOUSEHOLDS, household, actor, before)
     return household
+
+
+MSG_HOUSEHOLD_OPEN_ORDERS = (
+    "Xonadonning yakunlanmagan buyurtmalari bor ({codes}). Avval ularni yakunlang yoki bekor qiling."
+)
+MSG_HOUSEHOLD_OPEN_TASKS = (
+    "Xonadonga yakunlanmagan logistika topshiriqlari bor ({codes}). Avval ularni yakunlang yoki bekor qiling."
+)
+
+
+def _codes(items: list[str]) -> str:
+    shown = ", ".join(items[:3])
+    return f"{shown} va yana {len(items) - 3} ta" if len(items) > 3 else shown
+
+
+def delete_household(household: Household, *, actor: User | None) -> None:
+    """Soft delete a household and its OWNER account (history stays: movements, reports, orders, tasks, acts).
+
+    Refused (``409``) while the household has open orders or not-finished logistics tasks. The household
+    disappears from every list, search and statistic (``Household.objects``); its owner can no longer log in.
+    """
+    from logistics.models import ACTIVE_STATUSES, LogisticsTask
+    from orders.models import OPEN_STATUSES, Order
+
+    with transaction.atomic():
+        household = Household.all_objects.select_for_update(of=("self",)).get(pk=household.pk)
+        if household.deleted_at is not None:
+            return
+        orders = list(
+            Order.objects.filter(household=household, status__in=OPEN_STATUSES).order_by("id").values_list("pk", flat=True)
+        )
+        if orders:
+            raise InUse(MSG_HOUSEHOLD_OPEN_ORDERS.format(codes=_codes([f"BY-{pk:06d}" for pk in orders])))
+        tasks = list(
+            LogisticsTask.objects.filter(household=household, status__in=ACTIVE_STATUSES)
+            .order_by("id")
+            .values_list("pk", flat=True)
+        )
+        if tasks:
+            raise InUse(MSG_HOUSEHOLD_OPEN_TASKS.format(codes=_codes([LogisticsTask.code_for(pk) for pk in tasks])))
+        before = audit.snapshot(household)
+        household.deleted_at = timezone.now()
+        household.is_active = False
+        household.save(update_fields=["deleted_at", "is_active", "updated_at"])
+        account_services.delete_owner_account(household.owner, actor=actor)
+        audit.record(
+            module=AuditModule.HOUSEHOLDS,
+            action=AuditAction.DELETE,
+            obj=household,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "is_active": False},
+        )
 
 
 def set_household_location(

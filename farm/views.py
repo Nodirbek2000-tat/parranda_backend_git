@@ -16,7 +16,7 @@ from common import query
 from common.ids import ID_REGEX
 from common.permissions import IsAdminOrOwnerRole, IsAdminRole, IsOwnerRole, IsRoleIn, ReadOnlyFor
 from common.roles import Role, role_of
-from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_404, query as query_param
+from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_404, DetailSerializer, query as query_param
 from stats import services as stats_services
 from stats.schema import PERIOD_PARAMETERS, BatchStatsSerializer, HouseholdStatsSerializer
 
@@ -36,6 +36,8 @@ from .serializers import (
     OwnerBatchSerializer,
 )
 from .services import household_of
+
+ERROR_409 = DetailSerializer
 
 _HOUSEHOLD_CODE_RE = re.compile(r"^(?:XN-)?0*(\d{1,18})$", re.IGNORECASE)
 
@@ -90,7 +92,7 @@ class HouseholdViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
     lookup_value_regex = ID_REGEX
 
     def get_permissions(self):
-        if self.action in ("create", "partial_update"):
+        if self.action in ("create", "partial_update", "destroy"):
             return [IsAdminRole()]
         return [ReadAWOV()]
 
@@ -149,6 +151,12 @@ class HouseholdViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewset
         serializer.is_valid(raise_exception=True)
         services.update_household(household, dict(serializer.validated_data), actor=request.user)
         return Response(self._fresh(household))
+
+    @extend_schema(request=None, responses={204: None, 404: ERROR_404, 409: ERROR_409})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        """Delete a household and its owner account (kept as history, hidden; see services.delete_household)."""
+        services.delete_household(self.get_object(), actor=request.user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["get"], url_path="map", pagination_class=None)
     def map(self, request: Request) -> Response:

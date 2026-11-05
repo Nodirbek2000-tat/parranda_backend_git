@@ -15,7 +15,7 @@ from django.utils import timezone
 
 from farm import selectors
 from farm.selectors import _center_delta, _household_delta
-from farm.models import DailyReport, MovementType, PoultryMovement
+from farm.models import DailyReport, Household, MovementType, PoultryMovement
 from warehouse.models import OUTGOING_TYPES, Product, StockTransaction, StockTransactionType
 
 
@@ -178,7 +178,7 @@ class Command(BaseCommand):
 
     def _check_households(self) -> int:
         count = 0
-        for household in selectors.households_with_counts().order_by("id"):
+        for household in selectors.households_with_counts(Household.all_objects.all()).order_by("id"):
             count += 1
             if household.bird_count < 0:
                 self.problem(f"Xonadon {household.code}: parranda soni manfiy ({household.bird_count}).")
@@ -209,7 +209,8 @@ class Command(BaseCommand):
     # --- stock ----------------------------------------------------------------------------
 
     def _check_products(self) -> tuple[int, int]:
-        products = {product.pk: product for product in Product.objects.order_by("id")}
+        # ``all_objects``: soft-deleted products keep their stock history and must still add up.
+        products = {product.pk: product for product in Product.all_objects.order_by("id")}
         running: dict[int, Decimal] = defaultdict(Decimal)
         transactions = 0
         rows = (
@@ -270,7 +271,7 @@ class Command(BaseCommand):
             if remaining < 0 or remaining > received:
                 self.problem(f"{label}: qoldiq {remaining} 0 … {received} oralig‘ida emas.")
             tracked[product_id] += remaining
-        for product_id, name, balance in Product.objects.order_by("id").values_list("id", "name", "balance"):
+        for product_id, name, balance in Product.all_objects.order_by("id").values_list("id", "name", "balance"):
             total = tracked.get(product_id, Decimal(0))
             if total > balance:
                 self.problem(f"Mahsulot “{name}”: partiyalar qoldig‘i {total} > ombor qoldig‘i {balance}.")

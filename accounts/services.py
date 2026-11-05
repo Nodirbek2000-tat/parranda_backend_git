@@ -269,28 +269,45 @@ def delete_user(target: User, *, actor: User) -> None:
             is_superuser=True, is_active=True, deleted_at__isnull=True
         ).exclude(pk=target.pk).exists():
             raise ValueError(MSG_DELETE_LAST_SUPER)
-        before = audit.snapshot(target)
-        old_telegram = target.telegram_id
-        now = timezone.now()
-        target.deleted_at = now
-        target.is_active = False
-        target.telegram_id = None
-        target.sessions_revoked_at = now
-        tokens.bump_token_version(target)
-        target.username = f"{DELETED_USERNAME_PREFIX}{target.pk}-{target.username}"[:150]
-        target.save(update_fields=[
-            "deleted_at", "is_active", "telegram_id", "sessions_revoked_at", "token_version", "username",
-        ])
-        if old_telegram is not None:
-            _record_unlink(target, old_telegram, actor, reason="Hisob o‘chirildi")
-        audit.record(
-            module=AuditModule.USERS,
-            action=AuditAction.DELETE,
-            obj=target,
-            actor=actor,
-            before=before,
-            after={"deleted": True, "is_active": False},
-        )
+        _retire_account(target, actor=actor)
+
+
+def delete_owner_account(owner: User, *, actor: User | None) -> None:
+    """Delete the OWNER account of a household that is being deleted (``farm.services.delete_household``).
+
+    Same effect as :func:`delete_user` (blocked, sessions and Telegram link ended, login renamed, hidden); the
+    caller holds the transaction and has already locked the household.
+    """
+    owner = User.objects.select_for_update().get(pk=owner.pk)
+    if owner.deleted_at is not None:
+        return
+    _retire_account(owner, actor=actor)
+
+
+def _retire_account(target: User, *, actor: User | None) -> None:
+    """Mark the locked ``target`` deleted: blocked, sessions revoked, Telegram unlinked, login renamed, audited."""
+    before = audit.snapshot(target)
+    old_telegram = target.telegram_id
+    now = timezone.now()
+    target.deleted_at = now
+    target.is_active = False
+    target.telegram_id = None
+    target.sessions_revoked_at = now
+    tokens.bump_token_version(target)
+    target.username = f"{DELETED_USERNAME_PREFIX}{target.pk}-{target.username}"[:150]
+    target.save(update_fields=[
+        "deleted_at", "is_active", "telegram_id", "sessions_revoked_at", "token_version", "username",
+    ])
+    if old_telegram is not None:
+        _record_unlink(target, old_telegram, actor, reason="Hisob o‘chirildi")
+    audit.record(
+        module=AuditModule.USERS,
+        action=AuditAction.DELETE,
+        obj=target,
+        actor=actor,
+        before=before,
+        after={"deleted": True, "is_active": False},
+    )
 
 
 def _record_unlink(user: User, old_telegram_id: int, actor: User | None, reason: str = "") -> None:

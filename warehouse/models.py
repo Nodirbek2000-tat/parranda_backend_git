@@ -7,6 +7,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.functions import Lower
 
+from common.softdelete import SoftDeleteManager
 from farm.models import PoultryType
 
 
@@ -56,6 +57,11 @@ class Product(models.Model):
     dosage = models.CharField("Doza / qo‘llash", max_length=200, blank=True, default="")
     description = models.CharField("Tavsif", max_length=1000, blank=True, default="")
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
+    #: Soft delete (``warehouse.services.delete_product``): hidden by ``objects``, kept for history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Mahsulot"

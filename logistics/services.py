@@ -23,6 +23,7 @@ from audit import services as audit
 from audit.models import AuditAction, AuditModule
 from common.formatting import fmt_number
 from common.roles import Role, role_of
+from common.softdelete import InUse
 from core import files
 from core.models import AttachmentPurpose
 from core.settings_service import get_settings
@@ -31,6 +32,7 @@ from warehouse.models import MAX_AMOUNT, WHOLE_UNITS, Product, Unit
 
 from . import events, hooks, stock
 from .models import (
+    ACTIVE_STATUSES,
     LogisticsTask,
     LogisticsTaskItem,
     LogisticsTaskStatusLog,
@@ -757,3 +759,73 @@ def update_driver(*, actor: User, driver_id: int, changes: dict[str, Any]) -> Dr
     except IntegrityError:
         raise ValidationError({"user": [MSG_DRIVER_USER_TAKEN]}) from None
     return driver
+
+
+MSG_VEHICLE_IN_USE = (
+    "Transport yakunlanmagan logistika topshiriqlariga biriktirilgan ({codes}). "
+    "Avval ularni yakunlang, bekor qiling yoki boshqa transport biriktiring."
+)
+MSG_DRIVER_IN_USE = (
+    "Haydovchi yakunlanmagan logistika topshiriqlariga biriktirilgan ({codes}). "
+    "Avval ularni yakunlang, bekor qiling yoki boshqa haydovchi biriktiring."
+)
+DELETED_PLATE_PREFIX = "DEL-"
+
+
+def _open_task_codes(**lookup) -> str:
+    codes = list(
+        LogisticsTask.objects.filter(status__in=ACTIVE_STATUSES, **lookup).order_by("id").values_list("pk", flat=True)
+    )
+    shown = ", ".join(LogisticsTask.code_for(pk) for pk in codes[:3])
+    return f"{shown} va yana {len(codes) - 3} ta" if len(codes) > 3 else shown
+
+
+def delete_vehicle(*, actor: User, vehicle_id: int) -> None:
+    """Soft delete a vehicle (task history keeps it). The plate becomes ``DEL-<id>-<plate>`` so the same plate can
+    be registered again; refused (``409``) while the vehicle is on a not-finished task."""
+    with transaction.atomic():
+        vehicle = Vehicle.all_objects.select_for_update(of=("self",)).get(pk=vehicle_id)
+        if vehicle.deleted_at is not None:
+            return
+        codes = _open_task_codes(vehicle=vehicle)
+        if codes:
+            raise InUse(MSG_VEHICLE_IN_USE.format(codes=codes))
+        before = audit.snapshot(vehicle)
+        vehicle.deleted_at = timezone.now()
+        vehicle.is_active = False
+        max_length = Vehicle._meta.get_field("plate_number").max_length
+        vehicle.plate_number = f"{DELETED_PLATE_PREFIX}{vehicle.pk}-{vehicle.plate_number}"[:max_length]
+        vehicle.save(update_fields=["deleted_at", "is_active", "plate_number"])
+        audit.record(
+            module=AuditModule.FLEET,
+            action=AuditAction.DELETE,
+            obj=vehicle,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "is_active": False, "plate_number": vehicle.plate_number},
+        )
+
+
+def delete_driver(*, actor: User, driver_id: int) -> None:
+    """Soft delete a driver (task history keeps the name). The linked logistics user is released so it can be
+    linked to another driver; refused (``409``) while the driver is on a not-finished task."""
+    with transaction.atomic():
+        driver = Driver.all_objects.select_for_update(of=("self",)).get(pk=driver_id)
+        if driver.deleted_at is not None:
+            return
+        codes = _open_task_codes(driver=driver)
+        if codes:
+            raise InUse(MSG_DRIVER_IN_USE.format(codes=codes))
+        before = audit.snapshot(driver)
+        driver.deleted_at = timezone.now()
+        driver.is_active = False
+        driver.user = None
+        driver.save(update_fields=["deleted_at", "is_active", "user"])
+        audit.record(
+            module=AuditModule.FLEET,
+            action=AuditAction.DELETE,
+            obj=driver,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "is_active": False, "user": None},
+        )

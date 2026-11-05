@@ -97,6 +97,13 @@ class VehicleDetailView(APIView):
         services.update_vehicle(actor=request.user, vehicle_id=pk, changes=dict(serializer.validated_data))
         return Response(s.VehicleSerializer(self._get(pk)).data)
 
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """Delete a vehicle (kept in task history, hidden everywhere; see services.delete_vehicle)."""
+        self._get(pk)
+        services.delete_vehicle(actor=request.user, vehicle_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class DriverListView(GenericAPIView):
     permission_classes = [FleetPermission]
@@ -150,6 +157,13 @@ class DriverDetailView(APIView):
         serializer.is_valid(raise_exception=True)
         services.update_driver(actor=request.user, driver_id=pk, changes=dict(serializer.validated_data))
         return Response(s.DriverSerializer(self._get(pk)).data)
+
+    @extend_schema(request=None, responses={204: None, 403: ERROR_403, 404: ERROR_404, 409: ERROR_409})
+    def delete(self, request: Request, pk: int) -> Response:
+        """Delete a driver (kept in task history, hidden everywhere; see services.delete_driver)."""
+        self._get(pk)
+        services.delete_driver(actor=request.user, driver_id=pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # --- Tasks -----------------------------------------------------------------------------------------

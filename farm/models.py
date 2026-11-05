@@ -6,6 +6,8 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
+from common.softdelete import SoftDeleteManager
+
 
 class Household(models.Model):
     """A household (xonadon) that receives poultry. Exactly one OWNER user per household."""
@@ -31,6 +33,11 @@ class Household(models.Model):
     is_demo = models.BooleanField("Demo / sinov ma’lumoti", default=False)
     created_at = models.DateTimeField("Yaratilgan", auto_now_add=True)
     updated_at = models.DateTimeField("Yangilangan", auto_now=True)
+    #: Soft delete (``farm.services.delete_household``): hidden by ``objects``, kept for history.
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+
+    objects = SoftDeleteManager()
+    all_objects = models.Manager()
 
     class Meta:
         verbose_name = "Xonadon"

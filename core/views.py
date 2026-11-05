@@ -158,3 +158,33 @@ class SearchView(APIView):
         if len(q) > search.MAX_Q:
             raise ValidationError({"q": ["Ko‘pi bilan 100 ta belgi kiriting."]})
         return Response(search.search(request.user, q))
+
+
+class WipeRequestSerializer(serializers.Serializer):
+    password = serializers.CharField(max_length=128, trim_whitespace=False)
+    confirm = serializers.CharField(max_length=64)
+
+
+class SystemWipeView(APIView):
+    """``POST /api/system/wipe`` — Super Admin deletes all data except his own account (core/wipe.py)."""
+
+    permission_classes = [IsSuperAdmin]
+
+    @extend_schema(
+        request=WipeRequestSerializer,
+        responses={
+            200: inline_serializer("WipeResult", {"deleted": serializers.DictField(), "backup": serializers.CharField()}),
+            400: ERROR_400,
+            403: ERROR_403,
+        },
+    )
+    def post(self, request: Request) -> Response:
+        from . import wipe
+
+        serializer = WipeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            result = wipe.wipe(actor=request.user, **serializer.validated_data)
+        except wipe.WipeError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(result)

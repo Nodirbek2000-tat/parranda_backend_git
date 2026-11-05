@@ -27,8 +27,9 @@ from rest_framework.exceptions import ValidationError
 
 from accounts.models import User
 from audit import services as audit
-from audit.models import AuditModule
+from audit.models import AuditAction, AuditModule
 from common.formatting import fmt_number
+from common.softdelete import InUse, deleted_label
 from farm.models import Household
 from notifications import events
 
@@ -69,7 +70,10 @@ def _whole_units_error(product: Product, quantity: Decimal) -> str | None:
 def lock_products(product_ids: Iterable[int]) -> dict[int, Product]:
     """``SELECT … FOR UPDATE`` of the products in ascending id order (lock order §17.1)."""
     ids = sorted({int(pk) for pk in product_ids})
-    return {product.pk: product for product in Product.objects.select_for_update().filter(pk__in=ids).order_by("pk")}
+    # ``all_objects``: running work (a task cancelled in transit, an inventory) may still touch a deleted product.
+    return {
+        product.pk: product for product in Product.all_objects.select_for_update().filter(pk__in=ids).order_by("pk")
+    }
 
 
 # --- Posting -----------------------------------------------------------------------------------
@@ -369,3 +373,67 @@ def update_product(*, actor: User | None, product_id: int, changes: dict) -> Pro
     except IntegrityError:
         raise ValidationError({"name": [MSG_DUPLICATE_NAME]}) from None
     return product
+
+
+MSG_PRODUCT_RESERVED = (
+    "Mahsulotning {reserved} {unit} miqdori yetkazib berish uchun zaxiralangan. "
+    "Avval tegishli buyurtma va topshiriqlarni yakunlang yoki bekor qiling."
+)
+MSG_PRODUCT_OPEN_ORDERS = (
+    "Mahsulot yakunlanmagan buyurtmalarda bor ({codes}). Avval ularni yakunlang yoki bekor qiling."
+)
+MSG_PRODUCT_OPEN_TASKS = (
+    "Mahsulot yakunlanmagan logistika topshiriqlarida bor ({codes}). Avval ularni yakunlang yoki bekor qiling."
+)
+
+
+def _codes(items: list[str]) -> str:
+    shown = ", ".join(items[:3])
+    return f"{shown} va yana {len(items) - 3} ta" if len(items) > 3 else shown
+
+
+def delete_product(*, actor: User | None, product_id: int) -> None:
+    """Soft delete a product: hidden from lists, pickers, search and statistics, stock history kept.
+
+    The name gets a ``(o‘chirilgan #id)`` suffix so the same name can be used again. A remaining balance is
+    allowed (it simply disappears from the lists); refused (``409``) while stock is reserved or the product is in
+    an open order / not-finished logistics task.
+    """
+    from logistics.models import ACTIVE_STATUSES, LogisticsTaskItem
+    from orders.models import OPEN_STATUSES, OrderItem
+
+    with transaction.atomic():
+        product = Product.all_objects.select_for_update(of=("self",)).get(pk=product_id)
+        if product.deleted_at is not None:
+            return
+        if product.reserved > 0:
+            raise InUse(MSG_PRODUCT_RESERVED.format(reserved=fmt_number(product.reserved), unit=product.unit))
+        orders = list(
+            OrderItem.objects.filter(product=product, order__status__in=OPEN_STATUSES)
+            .order_by("order_id")
+            .values_list("order_id", flat=True)
+            .distinct()
+        )
+        if orders:
+            raise InUse(MSG_PRODUCT_OPEN_ORDERS.format(codes=_codes([f"BY-{pk:06d}" for pk in orders])))
+        tasks = list(
+            LogisticsTaskItem.objects.filter(product=product, task__status__in=ACTIVE_STATUSES)
+            .order_by("task_id")
+            .values_list("task__code", flat=True)
+            .distinct()
+        )
+        if tasks:
+            raise InUse(MSG_PRODUCT_OPEN_TASKS.format(codes=_codes([code or "LG" for code in tasks])))
+        before = norms.product_state(product)
+        product.deleted_at = timezone.now()
+        product.is_active = False
+        product.name = deleted_label(product.name, product.pk, Product._meta.get_field("name").max_length)
+        product.save(update_fields=["deleted_at", "is_active", "name"])
+        audit.record(
+            module=AuditModule.PRODUCTS,
+            action=AuditAction.DELETE,
+            obj=product,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "is_active": False, "name": product.name, "balance": str(product.balance)},
+        )

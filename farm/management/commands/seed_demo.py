@@ -101,7 +101,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, reset: bool = False, **options) -> None:
-        if Household.objects.exists() and not reset:
+        if Household.all_objects.exists() and not reset:
             raise CommandError(
                 "Bazada xonadonlar mavjud. Demo ma’lumotlar faqat bo‘sh bazaga yoziladi "
                 "(hammasini o‘chirib qayta yaratish uchun: --reset)."
@@ -122,7 +122,8 @@ class Command(BaseCommand):
     # --- reset ----------------------------------------------------------------------
 
     def _wipe(self) -> None:
-        owner_ids = list(Household.objects.values_list("owner_id", flat=True))
+        # ``all_objects``: soft-deleted households, products, vehicles and drivers are wiped too.
+        owner_ids = list(Household.all_objects.values_list("owner_id", flat=True))
         Notification.objects.all().delete()
         # V3 modules (orders, logistics, vet, files) reference households, products and stock operations.
         from core.models import Attachment
@@ -137,8 +138,8 @@ class Command(BaseCommand):
         VetRequest.objects.all().delete()
         LogisticsTask.objects.all().delete()  # items and status logs cascade
         Order.objects.all().delete()
-        Driver.objects.all().delete()
-        Vehicle.objects.all().delete()
+        Driver.all_objects.all().delete()
+        Vehicle.all_objects.all().delete()
         for attachment in Attachment.objects.all():
             attachment.file.delete(save=False)
             attachment.delete()
@@ -151,9 +152,9 @@ class Command(BaseCommand):
         StockLot.objects.all().delete()
         StockTransaction.objects.all().delete()
         PoultryMovement.objects.all().delete()
-        Product.objects.all().delete()
+        Product.all_objects.all().delete()
         PoultryBatch.objects.all().delete()
-        Household.objects.all().delete()
+        Household.all_objects.all().delete()
         User.objects.filter(pk__in=owner_ids).delete()
         User.objects.filter(username__in=DEMO_STAFF).delete()
 

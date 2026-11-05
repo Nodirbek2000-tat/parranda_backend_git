@@ -13,7 +13,7 @@ from common import query
 from common.ids import ID_REGEX
 from common.permissions import IsAnyRole, IsRoleIn, IsStaffRole, ReadOnlyFor
 from common.roles import Role, role_of
-from common.schema import DATE_FROM, DATE_TO, ERROR_400, query as query_param
+from common.schema import DATE_FROM, DATE_TO, ERROR_400, ERROR_404, query as query_param
 from stats import services as stats_services
 from stats.schema import PERIOD_PARAMETERS, ProductStatsSerializer
 
@@ -137,6 +137,13 @@ class ProductViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.
             actor=request.user, product_id=product.pk, changes=dict(serializer.validated_data)
         )
         return Response(ProductSerializer(product).data)
+
+    @extend_schema(request=None, responses={204: None, 404: ERROR_404, 409: ERROR_409})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        """Delete a product (kept as stock history, hidden everywhere; see services.delete_product)."""
+        product = self.get_object()
+        services.delete_product(actor=request.user, product_id=product.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(parameters=PERIOD_PARAMETERS, responses=ProductStatsSerializer)
     @action(detail=True, methods=["get"], url_path="stats", pagination_class=None)
