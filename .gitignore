@@ -1,0 +1,14 @@
+venv/
+.venv/
+.env
+db.sqlite3
+db.sqlite3-journal
+__pycache__/
+*.py[cod]
+demo_credentials.txt
+staticfiles/
+.coverage
+htmlcov/
+test_accounts.txt
+media/
+backups/

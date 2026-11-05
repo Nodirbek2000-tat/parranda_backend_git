@@ -1,0 +1,86 @@
+# NNP — nginx
+#
+# MARSHRUTLAR:
+#   /api/...    -> backend (Django REST API) — to'g'ridan-to'g'ri, ichki tarmoq orqali
+#   /admin/     -> backend (Django admin)
+#   /static/    -> Django statikasi (admin, API hujjati)
+#   qolgan hammasi -> frontend (Next.js Web App)
+#
+# Fayllar (/media) ochiq berilmaydi: ular faqat GET /api/files/{id} orqali,
+# ruxsat tekshirilib uzatiladi.
+#
+# Frontend ALOHIDA compose loyihasi — manzil o'zgaruvchi orqali har so'rovda
+# hal qilinadi: frontend hali ko'tarilmagan bo'lsa ham nginx ishga tushaveradi.
+
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+# ------------------------------------------------------------------ HTTP
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN} www.${DOMAIN};
+
+    # Let's Encrypt tekshiruvi — HTTPS'ga yo'naltirilmasligi SHART
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://${DOMAIN}$request_uri;
+    }
+}
+
+# ---------------------------------------------------- www -> asosiy domen
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name www.${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    include /etc/nginx/snippets/ssl.conf;
+
+    return 301 https://${DOMAIN}$request_uri;
+}
+
+# ----------------------------------------------------------------- HTTPS
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
+    include /etc/nginx/snippets/ssl.conf;
+    include /etc/nginx/snippets/security.conf;
+
+    # Fayl yuklash chegarasi backendda 10 MB; multipart qo'shimchasi uchun zaxira
+    client_max_body_size 12M;
+
+    set $frontend http://frontend:3000;
+    set $backend  http://backend:8000;
+
+    location /static/ {
+        alias /var/www/static/;
+        expires 30d;
+        access_log off;
+    }
+
+    location /api/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $backend;
+    }
+
+    location /admin/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $backend;
+    }
+
+    location / {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass $frontend;
+    }
+}

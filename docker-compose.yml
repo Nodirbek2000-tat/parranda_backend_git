@@ -1,0 +1,151 @@
+# NNP BACKEND — Postgres + Django + nginx + SSL (+ zaxira nusxa va rejali ishlar)
+#
+# Bu loyiha BIRINCHI ishga tushiriladi: u `nnp_net` tarmog'ini yaratadi,
+# parranda_next va parranda_bot shu tarmoqqa ulanadi.
+#
+#   cp .env.docker.example .env     # qiymatlarni to'ldiring
+#   docker compose build
+#   ./init-ssl.sh                   # faqat birinchi marta
+#   docker compose up -d
+#
+# DIQQAT: `docker compose down -v` YOZMANG — `-v` bazani o'chiradi.
+
+name: nnp-backend
+
+x-backend-common: &backend-common
+  build: .
+  image: nnp-backend:latest
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    MEDIA_ROOT: /app/media
+    BEHIND_HTTPS_PROXY: "True"
+  volumes:
+    - media:/app/media
+    - static:/app/staticfiles
+  networks: [nnp_net]
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nnp_net]
+
+  backend:
+    <<: *backend-common
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Rejali ishlar: emlash eslatmalari (15 daqiqada, idempotent), kuniga bir marta
+  # bog'lanmagan fayllarni va muddati o'tgan tokenlarni tozalash.
+  scheduler:
+    <<: *backend-common
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      MEDIA_ROOT: /app/media
+      SKIP_MIGRATE: "1"
+    command: >
+      sh -c "i=0;
+             while :; do
+               python manage.py send_reminders || true;
+               if [ $$((i % 96)) -eq 0 ]; then
+                 python manage.py cleanup_files || true;
+                 python manage.py flushexpiredtokens || true;
+               fi;
+               i=$$((i + 1));
+               sleep 900;
+             done"
+    healthcheck:
+      disable: true
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # Bazaning kunlik zaxira nusxasi (pg_dump), oxirgi 14 kun saqlanadi
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - backups:/backups
+    entrypoint: >
+      sh -c "while :; do
+               sleep 60;
+               f=/backups/nnp-$$(date +%Y%m%d-%H%M).sql.gz;
+               pg_dump --no-owner | gzip > $$f && echo saqlandi: $$f;
+               find /backups -name 'nnp-*.sql.gz' -mtime +14 -delete;
+               sleep 86340;
+             done"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [nnp_net]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - static:/var/www/static:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    environment:
+      DOMAIN: ${DOMAIN}
+    # Har 6 soatda qayta o'qiydi — yangilangan SSL kuchga kirsin.
+    # Oxirida `/docker-entrypoint.sh nginx ...` SHART: shablonlar faqat shunda konfigga aylanadi.
+    command: >
+      sh -c "rm -f /etc/nginx/conf.d/default.conf;
+             while :; do sleep 6h & wait $${!}; nginx -s reload; done &
+             exec /docker-entrypoint.sh nginx -g 'daemon off;'"
+    depends_on:
+      - backend
+    networks: [nnp_net]
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # Har 12 soatda tekshiradi, muddati yaqin bo'lsa o'zi yangilaydi
+    entrypoint: >
+      sh -c "trap exit TERM;
+             while :; do
+               certbot renew --webroot -w /var/www/certbot --quiet;
+               sleep 12h & wait $${!};
+             done"
+    networks: [nnp_net]
+
+networks:
+  nnp_net:
+    # Qat'iy nom — parranda_next va parranda_bot aynan shu nom bilan ulanadi
+    name: nnp_net
+
+volumes:
+  pgdata:
+  media:
+  static:
+  backups:
+  certbot-conf:
+  certbot-www:

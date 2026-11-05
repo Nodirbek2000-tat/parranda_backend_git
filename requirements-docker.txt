@@ -1,0 +1,3 @@
+# Faqat Docker/serverda kerak (Windows local ishga tushirishda shart emas)
+gunicorn==23.0.0
+psycopg[binary]==3.2.9

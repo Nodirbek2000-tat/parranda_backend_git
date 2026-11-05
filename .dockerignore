@@ -1,0 +1,26 @@
+# Obrazga tushmaydigan narsalar
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local SQLite baza va uning nusxalari — serverda Postgres ishlatiladi
+db.sqlite3
+db.sqlite3-journal
+backups/
+
+# Sirlar obrazga NUSXALANMAYDI — docker compose env_file orqali beriladi
+.env
+.env.*
+!.env.example
+!.env.docker.example
+demo_credentials.txt
+test_accounts.txt
+
+# Local yuklangan fayllar va statika — ular volume'da yashaydi
+media/
+staticfiles/
+
+.idea/
+.vscode/
+.git/
