@@ -796,7 +796,8 @@ def _lock_task(pk: int, user: User) -> tuple[TaskInstance, ProcessRun | None]:
     run = None
     if row["process_run_id"]:
         run = ProcessRun.objects.select_for_update().get(pk=row["process_run_id"])
-    task = TaskInstance.objects.select_for_update().select_related("household", "household__owner").get(pk=pk)
+    # of=("self",): household is nullable (LEFT JOIN) — PostgreSQL refuses FOR UPDATE on the nullable side.
+    task = TaskInstance.objects.select_for_update(of=("self",)).select_related("household", "household__owner").get(pk=pk)
     return task, run
 
 
@@ -995,7 +996,7 @@ def _advance(run: ProcessRun | None, task: TaskInstance, actor: User) -> None:
 
 def cancel_process(*, actor: User, pk: int, reason: str = "") -> ProcessRun:
     with transaction.atomic():
-        run = runs_visible(actor).select_for_update().filter(pk=pk).first()
+        run = runs_visible(actor).select_for_update(of=("self",)).filter(pk=pk).first()
         if run is None:
             raise NotFound("Jarayon topilmadi.")
         if run.status != ProcessRunStatus.RUNNING:

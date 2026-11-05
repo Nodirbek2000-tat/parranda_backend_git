@@ -417,7 +417,7 @@ def retry(notification_id: int, *, actor: User) -> Notification:
     from audit.models import AuditAction, AuditModule
 
     with transaction.atomic():
-        row = Notification.objects.select_for_update().select_related("recipient").get(pk=notification_id)
+        row = Notification.objects.select_for_update(of=("self",)).select_related("recipient").get(pk=notification_id)
         if row.status != NotificationStatus.FAILED:
             raise RetryConflict(MSG_RETRY_ONLY_FAILED)
         recipient = row.recipient
@@ -443,7 +443,7 @@ def retry_failed(*, actor: User, event: str = "", date_from=None, date_to=None) 
 
     retried = skipped = 0
     with transaction.atomic():
-        qs = Notification.objects.select_for_update().select_related("recipient").filter(
+        qs = Notification.objects.select_for_update(of=("self",)).select_related("recipient").filter(
             status=NotificationStatus.FAILED
         )
         if event:

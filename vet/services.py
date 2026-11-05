@@ -245,7 +245,7 @@ def _stock_out(
 
 
 def _lock_visit(pk: int) -> VetVisit:
-    return VetVisit.objects.select_for_update().select_related("household__owner", "batch", "vet").get(pk=pk)
+    return VetVisit.objects.select_for_update(of=("self",)).select_related("household__owner", "batch", "vet").get(pk=pk)
 
 
 def _set_request_in_progress(request_obj: VetRequest, actor: User, *, vet: User | None) -> None:
@@ -270,7 +270,7 @@ def plan_visit(*, actor: User, data: dict[str, Any]) -> VetVisit:
     with transaction.atomic():
         request_obj: VetRequest | None = data.get("request")
         if request_obj is not None:
-            request_obj = VetRequest.objects.select_for_update().select_related("household__owner").get(
+            request_obj = VetRequest.objects.select_for_update(of=("self",)).select_related("household__owner").get(
                 pk=request_obj.pk
             )
             if request_obj.status == RequestStatus.CLOSED:
@@ -369,7 +369,7 @@ def complete_visit(*, actor: User, pk: int, data: dict[str, Any]) -> VetVisit:
                 changes={"health_status": HealthStatus(visit.health_status).label},
             )
         if visit.request_id:
-            request_obj = VetRequest.objects.select_for_update().select_related("household__owner").get(
+            request_obj = VetRequest.objects.select_for_update(of=("self",)).select_related("household__owner").get(
                 pk=visit.request_id
             )
             _set_request_in_progress(request_obj, actor, vet=actor)
@@ -397,7 +397,7 @@ def cancel_visit(*, actor: User, pk: int, reason: str) -> VetVisit:
 
 def _lock_vaccination(pk: int) -> Vaccination:
     return (
-        Vaccination.objects.select_for_update()
+        Vaccination.objects.select_for_update(of=("self",))
         .select_related("household__owner", "batch", "vet", "product")
         .get(pk=pk)
     )
@@ -607,7 +607,7 @@ def update_disease(*, actor: User, pk: int, changes: dict[str, Any]) -> DiseaseR
     """PATCH; RESOLVED is final (``409``). RESOLVED without a date gets today."""
     with transaction.atomic():
         disease = (
-            DiseaseRecord.objects.select_for_update().select_related("household__owner", "batch", "vet").get(pk=pk)
+            DiseaseRecord.objects.select_for_update(of=("self",)).select_related("household__owner", "batch", "vet").get(pk=pk)
         )
         if disease.status == DiseaseStatus.RESOLVED:
             raise _conflict(disease, "Kasallik")
@@ -726,14 +726,14 @@ def update_treatment(*, actor: User, pk: int, changes: dict[str, Any]) -> Treatm
 
 
 def _lock_request(pk: int) -> VetRequest:
-    return VetRequest.objects.select_for_update().select_related("household__owner", "vet").get(pk=pk)
+    return VetRequest.objects.select_for_update(of=("self",)).select_related("household__owner", "vet").get(pk=pk)
 
 
 def create_request(*, actor: User, text: str, file_ids: list[int]) -> VetRequest:
     """OWNER: household forced own; at most 5 open requests per household (checked under the household lock)."""
     household = farm_services.household_of(actor)
     with transaction.atomic():
-        household = Household.objects.select_for_update().select_related("owner").get(pk=household.pk)
+        household = Household.objects.select_for_update(of=("self",)).select_related("owner").get(pk=household.pk)
         open_count = VetRequest.objects.filter(
             household=household, status__in=[RequestStatus.NEW, RequestStatus.IN_PROGRESS]
         ).count()
