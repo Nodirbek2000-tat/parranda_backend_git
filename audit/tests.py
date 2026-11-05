@@ -315,7 +315,7 @@ class FarmAndStockAuditTests(AuditTestCase):
     def test_batch_movement_report_stock(self):
         response = self.client.post(
             "/api/batches",
-            {"poultry_type": "LAYER", "breed": "Hy-Line", "initial_quantity": 100, "age_days": 1,
+            {"poultry_type": "BROILER", "breed": "Ross 308", "initial_quantity": 100, "age_days": 1,
              "supplier": "Inkubator", "arrived_at": (timezone.localdate() - timedelta(days=2)).isoformat()},
             format="json",
         )
@@ -338,7 +338,7 @@ class FarmAndStockAuditTests(AuditTestCase):
         self.assertEqual(row.object_repr, f"{movement['op_id']} Xonadonga tarqatish 40")
 
         self.login_as(self.owner_a)
-        report = self.client.post("/api/daily-reports", {"feed_kg": "12.50", "eggs": 30, "deaths": 2},
+        report = self.client.post("/api/daily-reports", {"feed_kg": "12.50", "meat_kg": "6.25", "deaths": 2},
                                   format="json").json()
         movements = self.rows(module="movements")
         self.assertEqual(len(movements), 2)

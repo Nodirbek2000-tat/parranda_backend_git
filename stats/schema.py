@@ -23,7 +23,7 @@ THRESHOLD_PARAMETER = OpenApiParameter(
 OVERVIEW_FILTER_PARAMETERS = [
     OpenApiParameter("region", str, description="Viloyat (xonadonlar to‘plami)"),
     OpenApiParameter("district", str, description="Tuman"),
-    OpenApiParameter("poultry_type", str, description="LAYER | BROILER | BREEDER — shu turdagi harakati bor xonadonlar"),
+    OpenApiParameter("poultry_type", str, description="BROILER | BREEDER — shu turdagi harakati bor xonadonlar"),
     OpenApiParameter("exclude_demo", str, description="1 — demo / sinov xonadonlarisiz (TZ §18)"),
 ]
 
@@ -57,14 +57,15 @@ class KpiSerializer(serializers.Serializer):
 class KpisSerializer(serializers.Serializer):
     birds_end = KpiSerializer()
     birds_avg = KpiSerializer()
-    eggs = KpiSerializer()
+    meat_kg = KpiSerializer(help_text="Σ meat_kg of the reports (kg).")
     feed_kg = KpiSerializer()
     deaths = KpiSerializer()
     distributed = KpiSerializer()
     returned = KpiSerializer()
     reports = KpiSerializer()
-    laying_rate_pct = KpiSerializer()
-    feed_per_egg_g = KpiSerializer()
+    fcr = KpiSerializer(help_text="Feed conversion ratio Σ feed_kg / Σ meat_kg (lower is better; null when no meat).")
+    meat_per_bird_kg = KpiSerializer(help_text="Σ meat_kg / birds_avg (kg per average bird).")
+    avg_weight_g = KpiSerializer(help_text="Bird-weighted mean of the reported avg_weight_g.")
     feed_per_bird_day_kg = KpiSerializer()
     mortality_pct = KpiSerializer()
     report_discipline_pct = KpiSerializer()
@@ -86,17 +87,16 @@ class OverviewCenterSerializer(serializers.Serializer):
 class OverviewSeriesSerializer(serializers.Serializer):
     date = serializers.DateField()
     birds = serializers.IntegerField()
-    layer_birds = serializers.IntegerField()
-    eggs = serializers.IntegerField()
+    meat_kg = _num(help_text="Σ DailyReport.meat_kg of the day.")
     feed_kg = _num()
-    meat_kg = _num(help_text="Σ DailyReport.meat_kg of the day (broilers).")
+    avg_weight_g = _nullable_num()
+    fcr = _nullable_num()
     deaths = serializers.IntegerField()
     distributed = serializers.IntegerField()
     returned = serializers.IntegerField()
     reports = serializers.IntegerField(help_text="All report rows of the day (inactive / birdless households too).")
     reported_expected = serializers.IntegerField(help_text="Households due that day that reported.")
     expected_reports = serializers.IntegerField(help_text="Households due that day (today: due so far).")
-    laying_rate_pct = _nullable_num()
 
 
 class OverviewPoultryTypeSerializer(serializers.Serializer):
@@ -116,11 +116,11 @@ class OverviewDistrictSerializer(serializers.Serializer):
     households = serializers.IntegerField()
     households_active = serializers.IntegerField()
     birds_end = serializers.IntegerField()
-    eggs = serializers.IntegerField()
+    meat_kg = _num()
     feed_kg = _num()
+    fcr = _nullable_num()
     deaths = serializers.IntegerField()
     reports = serializers.IntegerField()
-    laying_rate_pct = _nullable_num()
     mortality_pct = _nullable_num()
     report_discipline_pct = _nullable_num()
 
@@ -129,10 +129,11 @@ class RankedHouseholdSerializer(serializers.Serializer):
     household = HouseholdShortSerializer()
     district = serializers.CharField()
     is_active = serializers.BooleanField()
-    laying_rate_pct = _nullable_num()
-    eggs = serializers.IntegerField()
+    fcr = _nullable_num()
+    meat_kg = _num()
+    feed_kg = _num()
     reports = serializers.IntegerField()
-    layer_birds_avg = _nullable_num()
+    avg_weight_g = _nullable_num()
 
 
 class HighMortalityItemSerializer(serializers.Serializer):
@@ -157,17 +158,10 @@ class OverviewFiltersSerializer(serializers.Serializer):
     exclude_demo = serializers.CharField(required=False)
 
 
-class OverviewMeatSerializer(serializers.Serializer):
-    total_kg = _num()
-    previous_total_kg = _num()
-    avg_weight_g = _nullable_num()
-
-
 class OverviewStatsSerializer(serializers.Serializer):
     period = StatsComparedPeriodSerializer()
     generated_at = serializers.DateTimeField()
     filters = OverviewFiltersSerializer()
-    meat = OverviewMeatSerializer()
     households = OverviewHouseholdsSerializer()
     kpis = KpisSerializer()
     center = OverviewCenterSerializer()
@@ -197,16 +191,16 @@ class DisciplineSerializer(serializers.Serializer):
 class HouseholdSeriesSerializer(serializers.Serializer):
     date = serializers.DateField()
     birds = serializers.IntegerField()
-    layer_birds = serializers.IntegerField()
-    eggs = serializers.IntegerField()
+    meat_kg = _num(help_text="Σ DailyReport.meat_kg of the day.")
     feed_kg = _num()
+    avg_weight_g = _nullable_num()
+    fcr = _nullable_num()
     deaths = serializers.IntegerField()
     distributed = serializers.IntegerField()
     returned = serializers.IntegerField()
     reported = serializers.BooleanField()
     expected = serializers.BooleanField()
     pending = serializers.BooleanField(help_text="Today, due and not reported yet (not counted as missing).")
-    laying_rate_pct = _nullable_num()
 
 
 class HouseholdPoultryTypeSerializer(serializers.Serializer):
@@ -421,9 +415,9 @@ class SummaryHouseholdSerializer(serializers.Serializer):
 
 class OwnerTodaySerializer(serializers.Serializer):
     report_submitted = serializers.BooleanField()
-    eggs = serializers.IntegerField(allow_null=True)
     feed_kg = serializers.FloatField(allow_null=True)
     meat_kg = serializers.FloatField(allow_null=True, help_text="Bugungi hisobotdagi go‘sht (kg)")
+    avg_weight_g = serializers.FloatField(allow_null=True, help_text="Bugungi hisobotdagi o‘rtacha vazn (g)")
     deaths = serializers.IntegerField()
 
 
@@ -434,11 +428,11 @@ class OwnerWeekSerializer(serializers.Serializer):
     reports = serializers.IntegerField(help_text="All report rows of the 7 days.")
     reported = serializers.IntegerField(help_text="Expected days with a report (discipline numerator).")
     expected = serializers.IntegerField(help_text="Expected days (today only once reported).")
-    eggs = serializers.IntegerField()
     feed_kg = _num()
     meat_kg = _num()
+    fcr = _nullable_num()
+    avg_weight_g = _nullable_num()
     deaths = serializers.IntegerField()
-    laying_rate_pct = _nullable_num()
 
 
 class StaffTodaySerializer(serializers.Serializer):
@@ -446,10 +440,9 @@ class StaffTodaySerializer(serializers.Serializer):
     households_expected = serializers.IntegerField(help_text="Active households with birds today (due).")
     households_reported = serializers.IntegerField(help_text="Due households that reported today.")
     report_discipline_pct = _nullable_num()
-    eggs = serializers.IntegerField()
     feed_kg = _num()
     meat_kg = _num()
-    laying_rate_pct = _nullable_num()
+    fcr = _nullable_num()
     deaths = serializers.IntegerField(help_text="DEATH movements in households today.")
     deaths_center = serializers.IntegerField(help_text="DEATH movements in the center today.")
     birds_in_households = serializers.IntegerField()

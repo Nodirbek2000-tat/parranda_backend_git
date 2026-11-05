@@ -22,9 +22,9 @@ class SchemaMatchesResponsesTests(FrozenClockTestCase):
         cls.admin, cls.warehouse = staff()
         data = worked_example(cls.admin)
         cls.household = data["household"]
-        cls.layer = data["layer"]
-        report(cls.household, date(2026, 11, 4), 395, "60.50", deaths=2)
-        move(cls.admin, cls.layer, None, MovementType.DEATH, 1, date(2026, 11, 4))
+        cls.breeder = data["breeder"]
+        report(cls.household, date(2026, 11, 4), "30.25", "60.50", deaths=2, weight="2100")
+        move(cls.admin, cls.breeder, None, MovementType.DEATH, 1, date(2026, 11, 4))
         cls.product = make_product("Yem PK-1", min_stock="100")
         warehouse_services.record_stock_transaction(actor=cls.warehouse, product_id=cls.product.pk,
                                                     transaction_type="IN", quantity=Decimal("500"), document_no="K")
@@ -83,7 +83,7 @@ class SchemaMatchesResponsesTests(FrozenClockTestCase):
             (self.admin, f"/api/households/{self.household.pk}/stats?date_from=2026-11-01&date_to=2026-11-04",
              "/api/households/{id}/stats", {}),
             (owner, "/api/my/stats", "/api/my/stats", {}),
-            (self.admin, f"/api/batches/{self.layer.pk}/stats", "/api/batches/{id}/stats", {}),
+            (self.admin, f"/api/batches/{self.breeder.pk}/stats", "/api/batches/{id}/stats", {}),
             (self.admin, f"/api/products/{self.product.pk}/stats", "/api/products/{id}/stats", {}),
             (self.admin, "/api/warehouse/stats", "/api/warehouse/stats", {}),
             (None, "/api/bot/users/6001/summary", "/api/bot/users/{telegram_id}/summary",
@@ -103,7 +103,7 @@ class SchemaMatchesResponsesTests(FrozenClockTestCase):
                 self.check(schema, content, response.json(), template)
         # PATCH /api/batches/{id}
         self.client.force_authenticate(user=self.admin)
-        response = self.client.patch(f"/api/batches/{self.layer.pk}", {"supplier": "Yangi"}, format="json")
+        response = self.client.patch(f"/api/batches/{self.breeder.pk}", {"supplier": "Yangi"}, format="json")
         self.assertEqual(response.status_code, 200)
         content = schema["paths"]["/api/batches/{id}"]["patch"]["responses"]["200"]["content"]["application/json"]
         self.check(schema, content["schema"], response.json(), "PATCH batch")

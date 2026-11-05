@@ -18,9 +18,9 @@ class NegativePastCountTests(FrozenClockTestCase):
         cls.admin, cls.warehouse = staff()
         cls.household = make_household("Navbahor", "owner_neg")
         created_on(cls.household, date(2026, 10, 1))
-        layer = batch(cls.admin, 1000, date(2026, 10, 1))
+        breeder = batch(cls.admin, 1000, date(2026, 10, 1))
         broiler = batch(cls.admin, 1000, date(2026, 10, 1), PoultryType.BROILER)
-        move(cls.admin, layer, cls.household, MovementType.DISTRIBUTE, 100, date(2026, 10, 20))
+        move(cls.admin, breeder, cls.household, MovementType.DISTRIBUTE, 100, date(2026, 10, 20))
         move(cls.admin, broiler, cls.household, MovementType.DISTRIBUTE, 100, date(2026, 11, 3))
         # LEGACY data: a back-dated death of the broiler batch BEFORE it was distributed. Phase 1 accepted it
         # (current count 100 ≥ 100); the service now rejects it (see test_service_rejects_it), so it is
@@ -28,8 +28,8 @@ class NegativePastCountTests(FrozenClockTestCase):
         PoultryMovement.objects.create(batch=broiler, household=cls.household, type=MovementType.DEATH,
                                        quantity=100, date=date(2026, 11, 1), created_by=cls.admin)
         cls.broiler = broiler
-        report(cls.household, date(2026, 11, 1), 80, "10.00")
-        report(cls.household, date(2026, 11, 2), 85, "11.00")
+        report(cls.household, date(2026, 11, 1), "8.00", "10.00", weight="1500")
+        report(cls.household, date(2026, 11, 2), "9.00", "11.00", weight="1600")
 
     def test_service_rejects_it(self):
         with self.assertRaises(ValidationError) as ctx:
@@ -47,14 +47,16 @@ class NegativePastCountTests(FrozenClockTestCase):
         self.assertEqual(response.status_code, 200, response.content[:300])
 
     def test_values_with_negative_past_count(self):
-        """11-01 and 11-02: layers 100, broilers −100 → B = 0; feed share capped at 1 (all feed to layers)."""
+        """11-01 and 11-02: breeders 100, broilers −100 → B = 0: meat / FCR still count, weights do not."""
         self.login_as(self.admin)
         data = self.client.get(
             f"/api/households/{self.household.pk}/stats?date_from=2026-11-01&date_to=2026-11-03"
         ).json()
         kpis = data["kpis"]
-        self.assertEqual(kpis["laying_rate_pct"]["value"], 82.5)  # 165 / 200
-        self.assertEqual(kpis["feed_per_egg_g"]["value"], 127.3)  # 1000 × 21 / 165
+        self.assertEqual(kpis["meat_kg"]["value"], 17.0)
+        self.assertEqual(kpis["fcr"]["value"], 1.24)  # 21 / 17 = 1.235…
+        self.assertIsNone(kpis["avg_weight_g"]["value"])  # weights of days with B = 0 are not averaged
+        self.assertEqual(kpis["meat_per_bird_kg"]["value"], 0.51)  # 17 kg / (100 bird-days / 3 days)
         self.assertIsNone(kpis["feed_per_bird_day_kg"]["value"])  # no reported day with B > 0
         self.assertEqual([row["birds"] for row in data["series"]], [0, 0, 100])
         self.assertEqual(data["missing_days"], ["2026-11-03"])

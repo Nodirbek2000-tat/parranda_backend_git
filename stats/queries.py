@@ -30,6 +30,11 @@ def cents(field_name: str) -> Cast:
     return Cast(Round(F(field_name) * Value(Decimal("100"))), output_field=BigIntegerField())
 
 
+def cents_or(field_name: str, default: int = 0) -> Coalesce:
+    """Exact integer hundredths of a nullable decimal column (``default`` for NULL)."""
+    return Coalesce(cents(field_name), Value(default), output_field=BigIntegerField())
+
+
 def int_sum(expression, condition: Q | None = None) -> Coalesce:
     return Coalesce(Sum(expression, filter=condition), _ZERO, output_field=BigIntegerField())
 
@@ -189,13 +194,27 @@ def integer_rows(qs) -> list[tuple]:
         return cursor.fetchall()
 
 
-def report_rows(start: date, end: date, household_id: int | None = None) -> list[tuple[int, int, int, int]]:
-    """Q-c: ``(household_id, day index from start, eggs, feed in hundredths of kg)`` of every report."""
+#: ``weight`` column of :func:`report_rows` when the report states no average weight.
+NO_WEIGHT = -1
+
+
+def report_rows(start: date, end: date, household_id: int | None = None) -> list[tuple[int, int, int, int, int]]:
+    """Q-c: ``(household_id, day index from start, meat, feed, avg weight)`` of every report.
+
+    Amounts are integer hundredths (kg / g); a missing ``meat_kg`` is 0, a missing ``avg_weight_g`` is
+    :data:`NO_WEIGHT`.
+    """
     qs = DailyReport.objects.filter(date__gte=start, date__lte=end)
     if household_id is not None:
         qs = qs.filter(household_id=household_id)
     return integer_rows(
-        qs.order_by().values_list("household_id", DayIndex("date", start), "eggs", cents("feed_kg"))
+        qs.order_by().values_list(
+            "household_id",
+            DayIndex("date", start),
+            cents_or("meat_kg"),
+            cents("feed_kg"),
+            cents_or("avg_weight_g", NO_WEIGHT),
+        )
     )
 
 

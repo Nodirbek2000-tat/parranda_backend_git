@@ -53,8 +53,11 @@ class SeedDemoTests(TestCase):
 
         overview = stats_services.overview({})
         self.assertEqual(overview["households"]["total"], 12)
-        self.assertGreater(overview["kpis"]["eggs"]["value"], 0)
-        self.assertIsNotNone(overview["kpis"]["laying_rate_pct"]["previous"])
+        self.assertGreater(overview["kpis"]["meat_kg"]["value"], 0)
+        self.assertIsNotNone(overview["kpis"]["fcr"]["previous"])
+        self.assertIsNotNone(overview["kpis"]["avg_weight_g"]["value"])
+        self.assertEqual(set(PoultryBatch.objects.values_list("poultry_type", flat=True)), {"BROILER", "BREEDER"})
+        self.assertFalse(DailyReport.objects.filter(meat_kg__isnull=False, meat_kg__lte=0).exists())
         self.assertEqual(len(overview["by_district"]), 3)
         self.assertGreaterEqual(len(overview["top_households"]), 5)
         self.assertGreaterEqual(overview["high_mortality"]["count"], 1)

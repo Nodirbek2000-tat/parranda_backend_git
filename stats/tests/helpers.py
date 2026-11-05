@@ -38,11 +38,11 @@ class FrozenClockTestCase(APITestCase):
         self.client.force_authenticate(user=user)
 
 
-def batch(actor: User, quantity: int, arrived: date, poultry_type: str = PoultryType.LAYER) -> PoultryBatch:
+def batch(actor: User, quantity: int, arrived: date, poultry_type: str = PoultryType.BREEDER) -> PoultryBatch:
     return farm_services.create_batch(
         actor=actor,
         poultry_type=poultry_type,
-        breed="Lohmann Brown" if poultry_type == PoultryType.LAYER else "Ross 308",
+        breed="Ross 308 PS" if poultry_type == PoultryType.BREEDER else "Ross 308",
         initial_quantity=quantity,
         age_days=1,
         supplier="Toshkent inkubatori",
@@ -56,9 +56,16 @@ def move(actor: User, batch_obj: PoultryBatch, household: Household | None, kind
     )
 
 
-def report(household: Household, day: date, eggs: int, feed: str, deaths: int = 0):
+def report(household: Household, day: date, meat: str | None, feed: str, deaths: int = 0, weight: str | None = None):
+    """A daily report: ``meat`` / ``feed`` in kg, ``weight`` = average weight in g (``None`` = not stated)."""
     return farm_services.create_daily_report(
-        actor=household.owner, household=household, on_date=day, feed_kg=Decimal(feed), eggs=eggs, deaths=deaths
+        actor=household.owner,
+        household=household,
+        on_date=day,
+        feed_kg=Decimal(feed),
+        meat_kg=None if meat is None else Decimal(meat),
+        avg_weight_g=None if weight is None else Decimal(weight),
+        deaths=deaths,
     )
 
 
@@ -68,17 +75,20 @@ def created_on(household: Household, day: date) -> None:
 
 
 def worked_example(admin: User) -> dict:
-    """§1.3: household created 01.10.2026, LAYER 500 on 20.10, DEATH 4 on 02.11, BROILER 100 on 03.11."""
+    """§1.3: household created 01.10.2026, BREEDER 500 on 20.10, DEATH 4 on 02.11, BROILER 100 on 03.11.
+
+    Reports: 01.11 meat 25.5 kg / feed 55 kg / 1800 g, 03.11 meat 40.5 kg / feed 66 kg / 2000 g.
+    """
     household = make_household("Navbahor 12-uy", "owner_xn3")
     created_on(household, date(2026, 10, 1))
-    layer = batch(admin, 1000, date(2026, 10, 15))
+    breeder = batch(admin, 1000, date(2026, 10, 15))
     broiler = batch(admin, 300, date(2026, 11, 1), PoultryType.BROILER)
-    move(admin, layer, household, MovementType.DISTRIBUTE, 500, date(2026, 10, 20))
-    move(admin, layer, household, MovementType.DEATH, 4, date(2026, 11, 2))
+    move(admin, breeder, household, MovementType.DISTRIBUTE, 500, date(2026, 10, 20))
+    move(admin, breeder, household, MovementType.DEATH, 4, date(2026, 11, 2))
     move(admin, broiler, household, MovementType.DISTRIBUTE, 100, date(2026, 11, 3))
-    report(household, date(2026, 11, 1), 410, "55.00")
-    report(household, date(2026, 11, 3), 400, "66.00")
-    return {"household": household, "layer": layer, "broiler": broiler}
+    report(household, date(2026, 11, 1), "25.50", "55.00", weight="1800")
+    report(household, date(2026, 11, 3), "40.50", "66.00", weight="2000")
+    return {"household": household, "breeder": breeder, "broiler": broiler}
 
 
 def staff() -> tuple[User, User]:

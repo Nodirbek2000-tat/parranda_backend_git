@@ -52,10 +52,10 @@ class QueryBudgetTests(FrozenClockTestCase):
     def grow(self, households: int, products: int) -> None:
         """Add households with movements, reports and stock operations (+ audit rows and notifications)."""
         with audit_context("API", "127.0.0.1"):
-            layer = batch(self.admin, households * 100 + 50, date(2026, 9, 1))
+            breeder = batch(self.admin, households * 100 + 50, date(2026, 9, 1))
             broiler = batch(self.admin, households * 50 + 50, date(2026, 9, 1), PoultryType.BROILER)
-            self.batches += [layer, broiler]
-            move(self.admin, layer, None, MovementType.DEATH, 5, date(2026, 9, 2))
+            self.batches += [breeder, broiler]
+            move(self.admin, breeder, None, MovementType.DEATH, 5, date(2026, 9, 2))
             for _ in range(products):
                 index = len(self.products)
                 product = Product.objects.create(
@@ -72,11 +72,11 @@ class QueryBudgetTests(FrozenClockTestCase):
                 household = make_household(f"Uy {index}", f"budget_owner{index}")
                 created_on(household, date(2026, 9, 1))
                 User.objects.filter(pk=household.owner_id).update(telegram_id=8000 + index, must_change_password=False)
-                move(self.admin, layer, household, MovementType.DISTRIBUTE, 100, date(2026, 9, 5))
+                move(self.admin, breeder, household, MovementType.DISTRIBUTE, 100, date(2026, 9, 5))
                 move(self.admin, broiler, household, MovementType.DISTRIBUTE, 50, date(2026, 9, 5))
-                move(self.admin, layer, household, MovementType.DEATH, 1, date(2026, 10, 20))
+                move(self.admin, breeder, household, MovementType.DEATH, 1, date(2026, 10, 20))
                 for offset in range(6):
-                    report(household, TODAY - timedelta(days=offset * 7), 70, "15.5")
+                    report(household, TODAY - timedelta(days=offset * 7), "7.5", "15.5", weight="1900")
                 for product in self.products[:3]:
                     warehouse_services.record_stock_transaction(
                         actor=self.warehouse, product_id=product.pk, transaction_type="OUT", quantity=Decimal("3"),
@@ -90,7 +90,7 @@ class QueryBudgetTests(FrozenClockTestCase):
     def measure(self) -> dict[str, int]:
         first_household = self.households[0]
         owner = User.objects.get(pk=first_household.owner_id)
-        layer = self.batches[0]
+        first_batch = self.batches[0]
         product = self.products[0]
         plans = [
             (self.admin, "users", "/api/users"),
@@ -101,8 +101,8 @@ class QueryBudgetTests(FrozenClockTestCase):
             (self.admin, "household batches", f"/api/households/{first_household.pk}/batches"),
             (self.admin, "household stats", f"/api/households/{first_household.pk}/stats"),
             (self.admin, "batches", "/api/batches"),
-            (self.admin, "batch detail", f"/api/batches/{layer.pk}"),
-            (self.admin, "batch stats", f"/api/batches/{layer.pk}/stats"),
+            (self.admin, "batch detail", f"/api/batches/{first_batch.pk}"),
+            (self.admin, "batch stats", f"/api/batches/{first_batch.pk}/stats"),
             (self.admin, "movements", "/api/movements"),
             (self.admin, "daily reports", "/api/daily-reports"),
             (self.admin, "products", "/api/products"),

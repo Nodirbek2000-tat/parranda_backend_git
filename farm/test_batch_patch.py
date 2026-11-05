@@ -85,7 +85,7 @@ class NotificationPathTests(BaseAPITestCase):
         with self.captureOnCommitCallbacks(execute=True):
             created = self.client.post(
                 "/api/batches",
-                {"poultry_type": "LAYER", "breed": "X", "initial_quantity": 10, "age_days": 1, "supplier": "S",
+                {"poultry_type": "BREEDER", "breed": "X", "initial_quantity": 10, "age_days": 1, "supplier": "S",
                  "arrived_at": "2026-01-01"},
                 format="json",
             ).json()

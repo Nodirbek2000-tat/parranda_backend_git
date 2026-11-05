@@ -114,7 +114,8 @@ def _users(user: User, q: str, limit: int) -> list[Item]:
     from common.roles import role_display
 
     qs = User.objects.filter(
-        Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q) | Q(phone__icontains=q)
+        Q(username__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q) | Q(phone__icontains=q),
+        deleted_at__isnull=True,
     )
     if not user.is_superuser:
         qs = qs.exclude(is_superuser=True)

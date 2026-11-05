@@ -1,6 +1,6 @@
 """Report export (API_CONTRACT_V3 §11, §19.1 “Reports”).
 
-Dataset = the V2 §1.3 worked example (household XN, LAYER 500 + BROILER 100, two reports) plus a second
+Dataset = the V2 §1.3 worked example (household XN, BREEDER 500 + BROILER 100, two reports) plus a second
 household in another district with broilers only, on a frozen clock (04.11.2026 12:00 Tashkent).
 """
 
@@ -45,7 +45,7 @@ class ReportTestCase(FrozenClockTestCase):
         created_on(cls.other, date(2026, 10, 1))
         broiler = batch(cls.admin, 400, date(2026, 10, 25), PoultryType.BROILER)
         move(cls.admin, broiler, cls.other, MovementType.DISTRIBUTE, 200, date(2026, 10, 26))
-        report(cls.other, date(2026, 11, 2), 0, "20.00", deaths=2)
+        report(cls.other, date(2026, 11, 2), "12.50", "20.00", deaths=2, weight="1500")
         cls.feed = make_product("Yem PK-1", min_stock="50")
         warehouse_services.record_stock_transaction(
             actor=cls.warehouse, product_id=cls.feed.pk, transaction_type="IN", quantity=Decimal("500"),
@@ -127,10 +127,10 @@ class ReportNumbersTests(ReportTestCase):
         data = self.get("household_results", f"{example}&household={self.household.pk}").data
         row = data["rows"][0]
         self.assertEqual(row["birds_end"], 596)
-        self.assertEqual(row["eggs"], 810)
-        self.assertEqual(row["laying_rate_pct"], 81.3)
+        self.assertEqual(row["meat_kg"], 66.0)
         self.assertEqual(row["feed_kg"], 121.0)
-        self.assertEqual(row["feed_per_egg_g"], 135.7)
+        self.assertEqual(row["fcr"], 1.83)  # 121 / 66
+        self.assertEqual(row["avg_weight_g"], 1908.8)  # (1800×500 + 2000×596) / 1096
         self.assertEqual(row["deaths"], 4)
         self.assertEqual(row["mortality_pct"], 0.8)
         self.assertEqual(row["discipline_pct"], 66.7)
@@ -142,14 +142,20 @@ class ReportNumbersTests(ReportTestCase):
         self.login_as(self.admin)
         data = self.get("daily_production").data
         overview = self.client.get(f"/api/stats/overview?{PERIOD}").data["kpis"]
-        self.assertEqual(data["totals"]["eggs"], overview["eggs"]["value"])
+        self.assertEqual(data["totals"]["meat_kg"], overview["meat_kg"]["value"])
         self.assertEqual(data["totals"]["feed_kg"], overview["feed_kg"]["value"])
-        self.assertEqual(data["totals"]["laying_rate_pct"], overview["laying_rate_pct"]["value"])
+        self.assertEqual(data["totals"]["fcr"], overview["fcr"]["value"])
+        self.assertEqual(data["totals"]["avg_weight_g"], overview["avg_weight_g"]["value"])
+        # 78.5 kg meat, 141 kg feed → FCR 1.796… → 1.80
+        self.assertEqual((data["totals"]["meat_kg"], data["totals"]["fcr"]), (78.5, 1.8))
         self.assertEqual(data["row_count"], 3)
         first = data["rows"][0]
         self.assertEqual(first["date"], "2026-11-01")
         self.assertEqual(first["birds"], 500)
-        self.assertEqual(first["laying_rate_pct"], 82.0)
+        self.assertEqual((first["meat_kg"], first["feed_kg"], first["fcr"], first["avg_weight_g"]),
+                         (25.5, 55.0, 2.16, 1800.0))
+        self.assertEqual(set(first), {"date", "household_code", "household", "district", "birds", "feed_kg", "meat_kg",
+                                      "fcr", "avg_weight_g", "deaths", "note"})
         self.assertEqual([column["key"] for column in data["columns"]][:3], ["date", "household_code", "household"])
         self.assertEqual(data["period"], {"date_from": "2026-11-01", "date_to": "2026-11-04", "days": 4})
 
@@ -159,11 +165,11 @@ class ReportNumbersTests(ReportTestCase):
         self.assertEqual({row["household_code"] for row in rows}, {self.other.code})
         rows = self.get("mortality", f"{PERIOD}&poultry_type=BROILER").data["rows"]
         self.assertEqual({row["code"] for row in rows}, {self.household.code, self.other.code})
-        rows = self.get("mortality", f"{PERIOD}&poultry_type=LAYER").data["rows"]
+        rows = self.get("mortality", f"{PERIOD}&poultry_type=BREEDER").data["rows"]
         self.assertEqual([(row["code"], row["deaths"]) for row in rows], [(self.household.code, 4)])
         rows = self.get("household_results", f"{PERIOD}&poultry_type=BROILER").data["rows"]
         self.assertEqual({row["code"]: row["birds_end"] for row in rows}, {self.household.code: 100, self.other.code: 198})
-        data = self.get("poultry_movements", f"{PERIOD}&poultry_type=LAYER").data
+        data = self.get("poultry_movements", f"{PERIOD}&poultry_type=BREEDER").data
         self.assertEqual([row["type"] for row in data["rows"]], ["Nobud bo‘lish"])
 
     def test_stock_balance_and_feed(self):
@@ -185,6 +191,8 @@ class ReportNumbersTests(ReportTestCase):
         self.assertEqual(by_code[self.household.code]["feed_issued_kg"], 120.0)
         self.assertEqual(by_code[self.household.code]["feed_reported_kg"], 121.0)
         self.assertEqual(feed["totals"]["feed_issued_kg"], 120.0)
+        self.assertEqual((by_code[self.household.code]["meat_kg"], by_code[self.household.code]["fcr"]), (66.0, 1.83))
+        self.assertEqual(by_code[self.other.code]["fcr"], 1.6)  # 20 / 12.5
 
     def test_monthly_production_aligned_to_months(self):
         self.login_as(self.admin)
@@ -193,7 +201,8 @@ class ReportNumbersTests(ReportTestCase):
         self.assertEqual(data["period"]["date_to"], "2026-11-04")
         self.assertEqual([row["month"] for row in data["rows"]], ["10.2026", "11.2026"])
         november = data["rows"][1]
-        self.assertEqual((november["eggs"], november["reports"], november["households_reported"]), (810, 3, 2))
+        self.assertEqual((november["meat_kg"], november["reports"], november["households_reported"]), (78.5, 3, 2))
+        self.assertEqual(november["fcr"], 1.8)  # 141 / 78.5 = 1.796…
         default = self.get("monthly_production", "").data
         self.assertEqual(default["period"]["date_from"], "2026-01-01")
 
@@ -245,19 +254,20 @@ class ReportFileTests(ReportTestCase):
         sheet = load_workbook(io.BytesIO(response.content))["Hisobot"]
         self.assertEqual(sheet["A4"].value, "Filtrlar: Tuman — Navobod tumani")
         headers = [cell.value for cell in sheet[6]]
-        self.assertEqual(headers[:6], ["Sana", "Xonadon kodi", "Xonadon", "Tuman", "Parranda", "Tuxum"])
+        self.assertEqual(headers, ["Sana", "Xonadon kodi", "Xonadon", "Tuman", "Parranda", "Yem kg", "Go‘sht kg",
+                                   "FCR", "O‘rtacha vazn g", "Nobud", "Izoh"])
         first = sheet[7]
         self.assertEqual(first[0].value.date(), date(2026, 11, 1))
         self.assertEqual(first[0].number_format, "DD.MM.YYYY")
-        self.assertEqual(first[5].value, 410)
-        self.assertEqual(first[5].number_format, "#,##0")
-        self.assertEqual(first[6].number_format, '0.0"%"')
-        self.assertEqual(first[7].number_format, "#,##0.00")
+        self.assertEqual(first[4].number_format, "#,##0")
+        self.assertEqual((first[5].value, first[6].value), (55, 25.5))
+        self.assertEqual(first[6].number_format, "#,##0.00")
+        self.assertEqual(first[8].number_format, "#,##0.0")
         totals = sheet[9]
         self.assertEqual(totals[0].value, "Jami")
         self.assertTrue(totals[0].font.bold)
-        self.assertEqual(totals[5].value, 810)
-        self.assertEqual(sheet.auto_filter.ref, "A6:L8")
+        self.assertEqual(totals[6].value, 66)
+        self.assertEqual(sheet.auto_filter.ref, "A6:K8")
         summary = load_workbook(io.BytesIO(response.content))["Xulosa"]
         labels = [row[0].value for row in summary.iter_rows()]
         self.assertIn("Yaratdi", labels)
@@ -310,7 +320,7 @@ class ReportVerifierTests(ReportTestCase):
         self.login_as(self.admin)
         for key in ("households_activity", "feed_consumption", "vet_status", "logistics_efficiency"):
             plain = self.get(key).data
-            filtered = self.get(key, f"{PERIOD}&poultry_type=LAYER").data
+            filtered = self.get(key, f"{PERIOD}&poultry_type=BREEDER").data
             self.assertEqual(filtered["rows"], plain["rows"], key)
             self.assertNotIn("poultry_type", filtered["filters"], key)
         plain = self.get("stock_balance").data

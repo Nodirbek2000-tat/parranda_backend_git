@@ -83,7 +83,7 @@ class HouseholdTests(BaseAPITestCase):
         self.assertEqual(len(batches), 1)
         self.assertEqual(batches[0]["batch_code"], self.batch.code)
         self.assertEqual(batches[0]["count"], 300)
-        self.assertEqual(batches[0]["poultry_type_display"], "Tuxum yo‘nalishi")
+        self.assertEqual(batches[0]["poultry_type_display"], "Go‘sht yo‘nalishi")
 
     def test_map_lists_only_households_with_coordinates(self):
         self.household_a.latitude, self.household_a.longitude = 39.65, 66.96
@@ -118,7 +118,7 @@ class OwnerScopingTests(BaseAPITestCase):
 
     def test_reports_are_filtered(self):
         DailyReport.objects.create(
-            household=self.household_b, date=timezone.localdate(), bird_count=200, feed_kg=10, eggs=5
+            household=self.household_b, date=timezone.localdate(), bird_count=200, feed_kg=10, meat_kg=5
         )
         response = self.client.get("/api/daily-reports")
         self.assertEqual(response.data["count"], 0)
@@ -158,7 +158,7 @@ class BatchTests(BaseAPITestCase):
         self.login_as(self.admin)
         response = self.client.post(
             "/api/batches",
-            {"poultry_type": "LAYER", "breed": "X", "initial_quantity": 0, "age_days": -1, "supplier": "Y",
+            {"poultry_type": "BROILER", "breed": "X", "initial_quantity": 0, "age_days": -1, "supplier": "Y",
              "arrived_at": (timezone.localdate() + timedelta(days=1)).isoformat()},
             format="json",
         )
@@ -252,7 +252,7 @@ class MovementTests(BaseAPITestCase):
 
 class DailyReportTests(BaseAPITestCase):
     def post(self, **payload):
-        return self.client.post("/api/daily-reports", {"feed_kg": 25.5, "eggs": 240, **payload}, format="json")
+        return self.client.post("/api/daily-reports", {"feed_kg": 25.5, "meat_kg": 12.75, **payload}, format="json")
 
     def test_owner_report_with_deaths_creates_death_movement(self):
         self.login_as(self.owner_a)
@@ -284,9 +284,10 @@ class DailyReportTests(BaseAPITestCase):
         self.login_as(self.owner_a)
         tomorrow = (timezone.localdate() + timedelta(days=1)).isoformat()
         self.assertEqual(self.post(date=tomorrow).status_code, 400)
-        response = self.post(eggs=-1, feed_kg=-2)
+        response = self.post(meat_kg=-1, feed_kg=-2, avg_weight_g=-5)
         self.assertEqual(response.status_code, 400)
-        self.assertIn("eggs", response.data)
+        self.assertIn("meat_kg", response.data)
+        self.assertIn("avg_weight_g", response.data)
         self.assertIn("feed_kg", response.data)
 
     def test_admin_must_choose_household_and_warehouse_cannot_post(self):
@@ -371,12 +372,12 @@ class BackDatedMovementTests(BaseAPITestCase):
         self.assertEqual(self.post(batch=batch.pk, household=self.household_a.pk, type="DISTRIBUTE", quantity=600,
                                    date=self.day(-1)).status_code, 201)
         self.login_as(self.owner_a)
-        response = self.client.post("/api/daily-reports", {"feed_kg": 20, "eggs": 200, "deaths": 2,
+        response = self.client.post("/api/daily-reports", {"feed_kg": 20, "meat_kg": 10, "deaths": 2,
                                                             "date": self.day(-5)}, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         movement = PoultryMovement.objects.get(type=MovementType.DEATH)
         self.assertEqual((movement.batch_id, movement.quantity), (self.batch.pk, 2))
-        response = self.client.post("/api/daily-reports", {"feed_kg": 20, "eggs": 200, "deaths": 299,
+        response = self.client.post("/api/daily-reports", {"feed_kg": 20, "meat_kg": 10, "deaths": 299,
                                                             "date": self.day(-6)}, format="json")
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["deaths"], ["Yetarli parranda yo‘q. Mavjud: 298"])

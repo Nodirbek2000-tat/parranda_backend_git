@@ -13,7 +13,7 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
-from django.db.models import Count, F, Min, Q, Sum
+from django.db.models import Count, F, Min, Q
 from django.utils import timezone
 
 from accounts.models import User
@@ -109,8 +109,15 @@ def _type_row(poultry_type: str, totals: Totals, days: int) -> dict[str, Any]:
     }
 
 
-def _day_laying(scope: ScopeStats, j: int) -> float | None:
-    return round_half_up(metrics.laying_rate_pct(scope.series.rl_eggs[j], scope.series.rl_layer_days[j]), 1)
+def _day_production(scope: ScopeStats, j: int) -> dict[str, Any]:
+    """Meat, feed, bird-weighted average weight and FCR of day ``j`` of the current period."""
+    series = scope.series
+    return {
+        "meat_kg": _kg(series.meat_cents[j]),
+        "feed_kg": _kg(series.feed_cents[j]),
+        "avg_weight_g": round_half_up(metrics.avg_weight_g(series.weight_bird_cents[j], series.weighed_bird_days[j]), 1),
+        "fcr": round_half_up(metrics.fcr(series.feed_cents[j], series.meat_cents[j]), 2),
+    }
 
 
 # --- §1.4 overview ----------------------------------------------------------------------------
@@ -138,38 +145,6 @@ def overview_filters(params: Mapping[str, Any]) -> dict[str, str]:
     return result
 
 
-def _meat(period: Period, household_ids: list[int] | None) -> dict[str, Any]:
-    """Meat output (``DailyReport.meat_kg``) per day of the period + totals of the previous period. One query."""
-    qs = DailyReport.objects.filter(date__gte=period.previous_from, date__lte=period.date_to)
-    if household_ids is not None:
-        qs = qs.filter(household_id__in=household_ids)
-    rows = (
-        qs.order_by()
-        .values("date")
-        .annotate(meat=Sum("meat_kg"), weight=Sum("avg_weight_g"), weighed=Count("avg_weight_g"))
-        .values_list("date", "meat", "weight", "weighed")
-    )
-    per_day: dict[date, Decimal] = {}
-    current = previous = Decimal(0)
-    weight_sum = Decimal(0)
-    weighed = 0
-    for day, meat, weight, count in rows:
-        meat = meat or Decimal(0)
-        if day >= period.date_from:
-            per_day[day] = meat
-            current += meat
-            weight_sum += weight or Decimal(0)
-            weighed += count
-        else:
-            previous += meat
-    return {
-        "per_day": per_day,
-        "total_kg": float(round_half_up(current, 2)),
-        "previous_total_kg": float(round_half_up(previous, 2)),
-        "avg_weight_g": float(round_half_up(weight_sum / weighed, 1)) if weighed else None,
-    }
-
-
 def overview(params: Mapping[str, Any], today: date | None = None) -> dict[str, Any]:
     today = _today(today)
     period = resolve_period(params, today)
@@ -185,7 +160,6 @@ def overview(params: Mapping[str, Any], today: date | None = None) -> dict[str, 
         household_qs = household_qs.filter(is_demo=False)
     households = queries.household_meta(household_qs)
     scope = _flock_scope(period, households, today, poultry_type=filters.get("poultry_type"))
-    meat = _meat(period, list(scope.states) if filters else None)
     center_initial = queries.batches_initial_through(period.date_to)
     first, last = scope.current
 
@@ -199,17 +173,13 @@ def overview(params: Mapping[str, Any], today: date | None = None) -> dict[str, 
             {
                 "date": day.isoformat(),
                 "birds": scope.series.birds[j],
-                "layer_birds": scope.series.layer_birds[j],
-                "eggs": scope.series.eggs[j],
-                "feed_kg": _kg(scope.series.feed_cents[j]),
-                "meat_kg": float(meat["per_day"].get(day, Decimal(0))),
+                **_day_production(scope, j),
                 "deaths": scope.series.deaths[j],
                 "distributed": scope.series.distributed[j],
                 "returned": scope.series.returned[j],
                 "reports": scope.series.reports[j],
                 "reported_expected": scope.series.reported_expected[j],
                 "expected_reports": scope.series.expected[j],
-                "laying_rate_pct": _day_laying(scope, j),
             }
         )
 
@@ -228,8 +198,6 @@ def overview(params: Mapping[str, Any], today: date | None = None) -> dict[str, 
         "period": period.as_dict(),
         "generated_at": queries.generated_at(),
         "filters": filters,
-        # TZ §4 "tuxum yoki go‘sht": meat output from the daily reports (broilers).
-        "meat": {key: meat[key] for key in ("total_kg", "previous_total_kg", "avg_weight_g")},
         "households": {
             "total": len(states),
             "active": sum(1 for state in states if state.meta.is_active),
@@ -261,11 +229,11 @@ def _by_district(scope: ScopeStats, days: int) -> list[dict[str, Any]]:
                 "households": len(states),
                 "households_active": sum(1 for state in states if state.meta.is_active),
                 "birds_end": totals.birds_end,
-                "eggs": totals.eggs,
+                "meat_kg": _kg(totals.meat_cents),
                 "feed_kg": _kg(totals.feed_cents),
+                "fcr": round_half_up(values["fcr"], 2),
                 "deaths": totals.deaths,
                 "reports": totals.reports,
-                "laying_rate_pct": round_half_up(values["laying_rate_pct"], 1),
                 "mortality_pct": round_half_up(values["mortality_pct"], 1),
                 "report_discipline_pct": round_half_up(values["report_discipline_pct"], 1),
             }
@@ -275,20 +243,26 @@ def _by_district(scope: ScopeStats, days: int) -> list[dict[str, Any]]:
 
 
 def _ranking(scope: ScopeStats) -> dict[str, list[dict[str, Any]]]:
+    """Top / bottom households by FCR (feed per kg of meat, lower is better) over the current period.
+
+    Candidates: ≥ ``TOP_MIN_REPORTS`` reports and meat > 0. Top = lowest FCR (ties: more meat, then id);
+    bottom = highest FCR (ties: id), households of the top list excluded.
+    """
     candidates = [
         state
         for state in scope.states.values()
-        if state.current.reports >= TOP_MIN_REPORTS and state.current.rl_layer_days > 0
+        if state.current.reports >= TOP_MIN_REPORTS and state.current.meat_cents > 0
     ]
 
-    def rate(state) -> Fraction:
-        return Fraction(state.current.rl_eggs, state.current.rl_layer_days)
+    def conversion(state) -> Fraction:
+        return Fraction(state.current.feed_cents, state.current.meat_cents)
 
-    top = sorted(candidates, key=lambda state: (-rate(state), -state.current.eggs, state.meta.id))[:TOP_LIMIT]
+    top = sorted(candidates, key=lambda state: (conversion(state), -state.current.meat_cents, state.meta.id))
+    top = top[:TOP_LIMIT]
     top_ids = {state.meta.id for state in top}
     bottom = [
         state
-        for state in sorted(candidates, key=lambda state: (rate(state), state.meta.id))
+        for state in sorted(candidates, key=lambda state: (-conversion(state), state.meta.id))
         if state.meta.id not in top_ids
     ][:TOP_LIMIT]
 
@@ -298,10 +272,11 @@ def _ranking(scope: ScopeStats) -> dict[str, list[dict[str, Any]]]:
             "household": state.meta.short(),
             "district": state.meta.district,
             "is_active": state.meta.is_active,
-            "laying_rate_pct": round_half_up(metrics.laying_rate_pct(totals.rl_eggs, totals.rl_layer_days), 1),
-            "eggs": totals.eggs,
+            "fcr": round_half_up(metrics.fcr(totals.feed_cents, totals.meat_cents), 2),
+            "meat_kg": _kg(totals.meat_cents),
+            "feed_kg": _kg(totals.feed_cents),
             "reports": totals.reports,
-            "layer_birds_avg": round_half_up(metrics.ratio(totals.rl_layer_days, totals.rl_reports), 1),
+            "avg_weight_g": round_half_up(metrics.avg_weight_g(totals.weight_bird_cents, totals.weighed_bird_days), 1),
         }
 
     return {"top_households": [item(state) for state in top], "bottom_households": [item(state) for state in bottom]}
@@ -358,16 +333,13 @@ def household_stats(household: Household, params: Mapping[str, Any], today: date
             {
                 "date": day.isoformat(),
                 "birds": scope.series.birds[j],
-                "layer_birds": scope.series.layer_birds[j],
-                "eggs": scope.series.eggs[j],
-                "feed_kg": _kg(scope.series.feed_cents[j]),
+                **_day_production(scope, j),
                 "deaths": scope.series.deaths[j],
                 "distributed": scope.series.distributed[j],
                 "returned": scope.series.returned[j],
                 "reported": reported,
                 "expected": expected,
                 "pending": pending,
-                "laying_rate_pct": _day_laying(scope, j),
             }
         )
 
@@ -892,21 +864,21 @@ def _owner_summary(household: Household, today: date) -> dict[str, Any]:
     current = state.current
     last = SUMMARY_DAYS - 1
     submitted = last in scope.reported_days
-    meat_rows = dict(
-        DailyReport.objects.filter(household=household, date__gte=period.date_from, date__lte=today)
-        .order_by()
-        .values_list("date", "meat_kg")
-    )
-    meat_today = meat_rows.get(today)
-    meat_week = sum((value for value in meat_rows.values() if value is not None), Decimal(0))
+    today_report = (
+        DailyReport.objects.filter(household=household, date=today).values("meat_kg", "avg_weight_g").first()
+        if submitted
+        else None
+    ) or {}
+    meat_today = today_report.get("meat_kg")
+    weight_today = today_report.get("avg_weight_g")
     return {
         "household": {"id": household.pk, "code": household.code, "name": household.name},
         "bird_count": state.all.at(scope.current[1]),
         "today": {
             "report_submitted": submitted,
-            "eggs": scope.series.eggs[last] if submitted else None,
             "feed_kg": _kg(scope.series.feed_cents[last]) if submitted else None,
-            "meat_kg": float(meat_today) if submitted and meat_today is not None else None,
+            "meat_kg": _amount(meat_today) if meat_today is not None else None,
+            "avg_weight_g": round_half_up(weight_today, 1) if weight_today is not None else None,
             "deaths": scope.series.deaths[last],
         },
         "last_7d": {
@@ -914,11 +886,11 @@ def _owner_summary(household: Household, today: date) -> dict[str, Any]:
             "reports": current.reports,
             "reported": current.reported_expected,
             "expected": current.expected,
-            "eggs": current.eggs,
             "feed_kg": _kg(current.feed_cents),
-            "meat_kg": float(meat_week),
+            "meat_kg": _kg(current.meat_cents),
+            "fcr": round_half_up(metrics.fcr(current.feed_cents, current.meat_cents), 2),
+            "avg_weight_g": round_half_up(metrics.avg_weight_g(current.weight_bird_cents, current.weighed_bird_days), 1),
             "deaths": current.deaths,
-            "laying_rate_pct": round_half_up(metrics.laying_rate_pct(current.rl_eggs, current.rl_layer_days), 1),
         },
     }
 
@@ -928,32 +900,32 @@ def _staff_today(today: date) -> dict[str, Any]:
 
     ``households_expected`` = households due today (active, created, ``B_h(today) > 0``) = ``expected_reports``;
     ``households_reported`` = those with a report today = ``reported_expected``; ``deaths`` = household
-    DEATH movements of today (= ``series.deaths``), center deaths separately in ``deaths_center``.
+    DEATH movements of today (= ``series.deaths``), center deaths separately in ``deaths_center``;
+    ``fcr`` = Σ feed / Σ meat of today's reports.
     """
     households = list(Household.objects.order_by().values_list("id", "is_active", "created_at"))
     reports = list(
         DailyReport.objects.filter(date=today)
         .order_by()
-        .values_list("household_id", "eggs", queries.cents("feed_kg"), "meat_kg")
+        .values_list("household_id", queries.cents("feed_kg"), queries.cents_or("meat_kg"))
     )
     flock_rows = list(
         PoultryMovement.objects.filter(date__lte=today)
         .order_by()
-        .values("household_id", "batch__poultry_type")
+        .values("household_id")
         .annotate(
             household_net=queries.int_sum(queries.HOUSEHOLD_DELTA),
             center_net=queries.int_sum(queries.CENTER_DELTA),
             deaths_today=queries.int_sum("quantity", Q(type=MovementType.DEATH, date=today)),
         )
-        .values_list("household_id", "batch__poultry_type", "household_net", "center_net", "deaths_today")
+        .values_list("household_id", "household_net", "center_net", "deaths_today")
     )
     initial = queries.batches_initial_through(today)
     low_stock_count = Product.objects.filter(is_active=True, balance__lte=F("min_stock")).count()
 
-    layers: dict[int, int] = defaultdict(int)
     birds: dict[int, int] = defaultdict(int)
     in_households = center_net = deaths = deaths_center = 0
-    for household_id, poultry_type, household_net, row_center, deaths_today in flock_rows:
+    for household_id, household_net, row_center, deaths_today in flock_rows:
         center_net += row_center
         if household_id is None:
             deaths_center += deaths_today
@@ -961,34 +933,25 @@ def _staff_today(today: date) -> dict[str, Any]:
         deaths += deaths_today
         in_households += household_net
         birds[household_id] += household_net
-        if poultry_type == PoultryType.LAYER:
-            layers[household_id] += household_net
     due = {
         household_id
         for household_id, is_active, created_at in households
         if is_active and timezone.localdate(created_at) <= today and birds.get(household_id, 0) > 0
     }
-    eggs = feed_cents = reported_due = layer_eggs = layer_birds = 0
-    meat = Decimal(0)
-    for household_id, report_eggs, report_feed, report_meat in reports:
-        meat += report_meat or Decimal(0)
-        eggs += report_eggs
+    feed_cents = meat_cents = reported_due = 0
+    for household_id, report_feed, report_meat in reports:
         feed_cents += report_feed
+        meat_cents += report_meat
         reported_due += 1 if household_id in due else 0
-        layer_count = layers.get(household_id, 0)
-        if layer_count > 0:
-            layer_eggs += report_eggs
-            layer_birds += layer_count
     in_center = initial + center_net
     return {
         "households_active": sum(1 for _id, is_active, _created in households if is_active),
         "households_expected": len(due),
         "households_reported": reported_due,
         "report_discipline_pct": round_half_up(metrics.percent(reported_due, len(due)), 1),
-        "eggs": eggs,
         "feed_kg": _kg(feed_cents),
-        "meat_kg": float(meat),
-        "laying_rate_pct": round_half_up(metrics.laying_rate_pct(layer_eggs, layer_birds), 1),
+        "meat_kg": _kg(meat_cents),
+        "fcr": round_half_up(metrics.fcr(feed_cents, meat_cents), 2),
         "deaths": deaths,
         "deaths_center": deaths_center,
         "birds_in_households": in_households,

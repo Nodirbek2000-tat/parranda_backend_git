@@ -20,29 +20,29 @@ class ProblemHouseholdTests(FrozenClockTestCase):
     @classmethod
     def setUpTestData(cls):
         cls.admin, cls.warehouse = staff()
-        layer = batch(cls.admin, 5000, date(2026, 9, 1))
+        flock = batch(cls.admin, 5000, date(2026, 9, 1))
         # quiet: 3 days without a report (problem_report_days = 2 by default)
         cls.quiet = make_household("Jim 1-uy", "owner_q")
         created_on(cls.quiet, date(2026, 9, 1))
-        move(cls.admin, layer, cls.quiet, MovementType.DISTRIBUTE, 100, date(2026, 10, 1))
-        report(cls.quiet, TODAY - timedelta(days=3), 50, "10.00")
+        move(cls.admin, flock, cls.quiet, MovementType.DISTRIBUTE, 100, date(2026, 10, 1))
+        report(cls.quiet, TODAY - timedelta(days=3), "5.00", "10.00")
         # dying: 10 deaths of 110 in 7 days (9.1 % > 5 %), reported today
         cls.dying = make_household("O‘lim 2-uy", "owner_d")
         created_on(cls.dying, date(2026, 9, 1))
-        move(cls.admin, layer, cls.dying, MovementType.DISTRIBUTE, 110, date(2026, 10, 1))
-        move(cls.admin, layer, cls.dying, MovementType.DEATH, 10, TODAY - timedelta(days=2))
-        report(cls.dying, TODAY, 60, "11.00")
+        move(cls.admin, flock, cls.dying, MovementType.DISTRIBUTE, 110, date(2026, 10, 1))
+        move(cls.admin, flock, cls.dying, MovementType.DEATH, 10, TODAY - timedelta(days=2))
+        report(cls.dying, TODAY, "6.00", "11.00")
         # never reported since the distribution 5 days ago + an overdue vaccination + an open disease
         cls.worst = make_household("Yomon 3-uy", "owner_w")
         created_on(cls.worst, date(2026, 9, 1))
-        move(cls.admin, layer, cls.worst, MovementType.DISTRIBUTE, 50, TODAY - timedelta(days=5))
+        move(cls.admin, flock, cls.worst, MovementType.DISTRIBUTE, 50, TODAY - timedelta(days=5))
         Vaccination.objects.create(household=cls.worst, vaccine_name="ND", planned_date=TODAY - timedelta(days=1))
         DiseaseRecord.objects.create(household=cls.worst, disease_name="Kolibakterioz", diagnosed_date=TODAY, cases=3)
         # fine: reported today, no deaths
         cls.fine = make_household("Yaxshi 4-uy", "owner_f")
         created_on(cls.fine, date(2026, 9, 1))
-        move(cls.admin, layer, cls.fine, MovementType.DISTRIBUTE, 100, date(2026, 10, 1))
-        report(cls.fine, TODAY, 70, "10.00")
+        move(cls.admin, flock, cls.fine, MovementType.DISTRIBUTE, 100, date(2026, 10, 1))
+        report(cls.fine, TODAY, "7.00", "10.00")
         # expiring lot
         feed = make_product("Vaksina ND", min_stock="0")
         warehouse_services.record_stock_transaction(

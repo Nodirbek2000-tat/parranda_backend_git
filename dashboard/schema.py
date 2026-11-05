@@ -25,14 +25,12 @@ class DashboardLowStockSerializer(serializers.Serializer):
 
 class ProductionDaySerializer(serializers.Serializer):
     date = serializers.DateField()
-    eggs = serializers.IntegerField()
-    feed_kg = serializers.FloatField()
     meat_kg = serializers.FloatField()
+    feed_kg = serializers.FloatField()
 
 
 class ProductionMonthSerializer(serializers.Serializer):
     month = serializers.CharField(help_text="YYYY-MM")
-    eggs = serializers.IntegerField()
     meat_kg = serializers.FloatField()
     feed_kg = serializers.FloatField()
     reports = serializers.IntegerField()
@@ -83,7 +81,6 @@ class AdminDashboardSerializer(serializers.Serializer):
     deaths_30d_center = serializers.IntegerField()
     feed_stock_kg = serializers.FloatField()
     feed_used_today = serializers.FloatField()
-    eggs_today = serializers.IntegerField()
     meat_today = serializers.FloatField()
     reports_today = serializers.IntegerField()
     households_without_report_today = HouseholdShortSerializer(many=True)
@@ -100,9 +97,9 @@ class OwnerDashboardSerializer(serializers.Serializer):
     household = HouseholdSerializer()
     bird_count = serializers.IntegerField()
     today_report = DailyReportSerializer(allow_null=True)
-    eggs_7d = serializers.IntegerField()
     feed_7d = serializers.FloatField()
     meat_7d = serializers.FloatField()
+    fcr_7d = serializers.FloatField(allow_null=True, help_text="feed_7d / meat_7d (null when no meat).")
     deaths_7d = serializers.IntegerField()
     deaths_30d = serializers.IntegerField()
     batches = HouseholdBatchSerializer(many=True)

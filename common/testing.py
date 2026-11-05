@@ -44,11 +44,11 @@ def make_household(name: str, username: str, **extra) -> Household:
     return household
 
 
-def make_batch(actor: User, quantity: int = 1000, poultry_type: str = PoultryType.LAYER) -> PoultryBatch:
+def make_batch(actor: User, quantity: int = 1000, poultry_type: str = PoultryType.BROILER) -> PoultryBatch:
     return farm_services.create_batch(
         actor=actor,
         poultry_type=poultry_type,
-        breed="Lohmann Brown",
+        breed="Ross 308",
         initial_quantity=quantity,
         age_days=1,
         supplier="Toshkent inkubatori",

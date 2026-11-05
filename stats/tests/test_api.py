@@ -10,7 +10,7 @@ from django.test import override_settings
 from accounts.models import User
 from common.roles import Role
 from common.testing import BOT_API_TOKEN, make_household, make_product, make_user
-from farm.models import DailyReport, MovementType
+from farm.models import DailyReport, MovementType, PoultryType
 from warehouse import services as warehouse_services
 from warehouse.models import Product, ProductCategory, StockTransaction, Unit
 
@@ -25,7 +25,7 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         cls.admin, cls.warehouse = staff()
         data = worked_example(cls.admin)
         cls.household = data["household"]
-        cls.layer = data["layer"]
+        cls.breeder = data["breeder"]
         cls.broiler = data["broiler"]
         cls.owner = cls.household.owner
 
@@ -38,14 +38,19 @@ class WorkedExampleAPITests(FrozenClockTestCase):
     def test_household_stats_reproduce_worked_example(self):
         data = self.household_stats()
         kpis = data["kpis"]
-        self.assertEqual(kpis["laying_rate_pct"]["value"], 81.3)
-        self.assertEqual(kpis["feed_per_egg_g"]["value"], 135.7)
+        self.assertEqual(list(kpis), ["birds_end", "birds_avg", "meat_kg", "feed_kg", "deaths", "distributed",
+                                      "returned", "reports", "fcr", "meat_per_bird_kg", "avg_weight_g",
+                                      "feed_per_bird_day_kg", "mortality_pct", "report_discipline_pct"])
+        # FCR 121 / 66 = 1.8333; meat per bird 66 / 530.667 = 0.12437; weight (1800×500 + 2000×596) / 1096.
+        self.assertEqual(kpis["fcr"]["value"], 1.83)
+        self.assertEqual(kpis["meat_per_bird_kg"]["value"], 0.124)
+        self.assertEqual(kpis["avg_weight_g"]["value"], 1908.8)
         self.assertEqual(kpis["feed_per_bird_day_kg"]["value"], 0.110)
         self.assertEqual(kpis["mortality_pct"]["value"], 0.8)
         self.assertEqual(kpis["report_discipline_pct"]["value"], 66.7)
         self.assertEqual(kpis["birds_end"]["value"], 596)
         self.assertEqual(kpis["birds_avg"]["value"], 530.7)
-        self.assertEqual(kpis["eggs"]["value"], 810)
+        self.assertEqual(kpis["meat_kg"]["value"], 66.0)
         self.assertEqual(kpis["feed_kg"]["value"], 121.0)
         self.assertEqual(kpis["deaths"]["value"], 4)
         self.assertEqual(kpis["distributed"]["value"], 100)
@@ -62,12 +67,13 @@ class WorkedExampleAPITests(FrozenClockTestCase):
 
     def test_previous_period_and_deltas(self):
         kpis = self.household_stats()["kpis"]
-        # Previous period 29.10–31.10: 500 layer birds, no reports, no deaths.
+        # Previous period 29.10–31.10: 500 breeder birds, no reports, no deaths.
         self.assertEqual(kpis["birds_end"], {"value": 596, "previous": 500, "delta": 19.2, "delta_unit": "%"})
-        self.assertEqual(kpis["eggs"], {"value": 810, "previous": 0, "delta": None, "delta_unit": "%"})
+        self.assertEqual(kpis["meat_kg"], {"value": 66.0, "previous": 0.0, "delta": None, "delta_unit": "%"})
         self.assertEqual(kpis["mortality_pct"], {"value": 0.8, "previous": 0.0, "delta": 0.8, "delta_unit": "pp"})
-        self.assertEqual(kpis["laying_rate_pct"]["previous"], None)
-        self.assertEqual(kpis["laying_rate_pct"]["delta"], None)
+        self.assertEqual(kpis["fcr"], {"value": 1.83, "previous": None, "delta": None, "delta_unit": "%"})
+        self.assertEqual(kpis["avg_weight_g"]["previous"], None)
+        self.assertEqual(kpis["meat_per_bird_kg"], {"value": 0.124, "previous": 0.0, "delta": None, "delta_unit": "%"})
         self.assertEqual(kpis["report_discipline_pct"]["previous"], 0.0)
         self.assertEqual(kpis["report_discipline_pct"]["delta"], 66.7)
 
@@ -75,28 +81,30 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         series = self.household_stats()["series"]
         self.assertEqual([row["date"] for row in series], ["2026-11-01", "2026-11-02", "2026-11-03"])
         self.assertEqual([row["birds"] for row in series], [500, 496, 596])
-        self.assertEqual([row["layer_birds"] for row in series], [500, 496, 496])
-        self.assertEqual([row["eggs"] for row in series], [410, 0, 400])
+        self.assertEqual([row["meat_kg"] for row in series], [25.5, 0.0, 40.5])
         self.assertEqual([row["feed_kg"] for row in series], [55.0, 0.0, 66.0])
+        self.assertEqual([row["avg_weight_g"] for row in series], [1800.0, None, 2000.0])
+        self.assertEqual([row["fcr"] for row in series], [2.16, None, 1.63])  # 55 / 25.5, 66 / 40.5
         self.assertEqual([row["deaths"] for row in series], [0, 4, 0])
         self.assertEqual([row["distributed"] for row in series], [0, 0, 100])
         self.assertEqual([row["reported"] for row in series], [True, False, True])
         self.assertEqual([row["expected"] for row in series], [True, True, True])
-        self.assertEqual([row["laying_rate_pct"] for row in series], [82.0, None, 80.6])
+        self.assertEqual(set(series[0]), {"date", "birds", "meat_kg", "feed_kg", "avg_weight_g", "fcr", "deaths",
+                                          "distributed", "returned", "reported", "expected", "pending"})
 
     def test_by_type_and_batches(self):
         data = self.household_stats()
         self.assertEqual(
             data["by_poultry_type"],
             [
-                {"poultry_type": "LAYER", "poultry_type_display": "Tuxum yo‘nalishi", "birds_end": 496,
-                 "birds_avg": 497.3, "deaths": 4, "mortality_pct": 0.8},
                 {"poultry_type": "BROILER", "poultry_type_display": "Go‘sht yo‘nalishi", "birds_end": 100,
                  "birds_avg": 33.3, "deaths": 0, "mortality_pct": 0.0},
+                {"poultry_type": "BREEDER", "poultry_type_display": "Naslli", "birds_end": 496,
+                 "birds_avg": 497.3, "deaths": 4, "mortality_pct": 0.8},
             ],
         )
         self.assertEqual([(row["batch_id"], row["count"]) for row in data["batches"]],
-                         [(self.layer.pk, 496), (self.broiler.pk, 100)])
+                         [(self.breeder.pk, 496), (self.broiler.pk, 100)])
 
     def test_my_stats_is_identical_for_the_owner(self):
         expected = self.household_stats()
@@ -112,22 +120,25 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         data = self.client.get(f"/api/stats/overview{EXAMPLE}").json()
         self.assertEqual(data["kpis"], self.household_stats()["kpis"])
         self.assertEqual(data["households"], {"total": 1, "active": 1, "with_birds": 1, "reporting": 1})
-        # Center: layer 1000 − 500 = 500, broiler 300 − 100 = 200 (arrived 01.11 ≤ 03.11).
+        # Center: breeder 1000 − 500 = 500, broiler 300 − 100 = 200 (arrived 01.11 ≤ 03.11).
         self.assertEqual(data["center"], {"birds_end": 700, "deaths": 0, "out": 0})
         self.assertEqual([row["expected_reports"] for row in data["series"]], [1, 1, 1])
         self.assertEqual([row["reports"] for row in data["series"]], [1, 0, 1])
-        self.assertEqual([row["poultry_type"] for row in data["by_poultry_type"]], ["LAYER", "BROILER", "BREEDER"])
+        self.assertEqual([row["poultry_type"] for row in data["by_poultry_type"]], ["BROILER", "BREEDER"])
         self.assertEqual(
-            data["by_poultry_type"][2],
-            {"poultry_type": "BREEDER", "poultry_type_display": "Naslli", "households": 0, "birds_end": 0,
-             "birds_avg": 0.0, "deaths": 0, "distributed": 0, "mortality_pct": None},
+            data["by_poultry_type"][1],
+            {"poultry_type": "BREEDER", "poultry_type_display": "Naslli", "households": 1, "birds_end": 496,
+             "birds_avg": 497.3, "deaths": 4, "distributed": 0, "mortality_pct": 0.8},
         )
-        self.assertEqual(data["by_poultry_type"][1]["distributed"], 100)
+        self.assertEqual(data["by_poultry_type"][0]["distributed"], 100)
+        self.assertNotIn("meat", data)  # meat lives in the KPIs
+        self.assertEqual([row["meat_kg"] for row in data["series"]], [25.5, 0.0, 40.5])
+        self.assertEqual([row["fcr"] for row in data["series"]], [2.16, None, 1.63])
         district = data["by_district"][0]
         self.assertEqual(
-            {key: district[key] for key in ("households", "birds_end", "eggs", "laying_rate_pct", "mortality_pct",
+            {key: district[key] for key in ("households", "birds_end", "meat_kg", "feed_kg", "fcr", "mortality_pct",
                                             "report_discipline_pct")},
-            {"households": 1, "birds_end": 596, "eggs": 810, "laying_rate_pct": 81.3, "mortality_pct": 0.8,
+            {"households": 1, "birds_end": 596, "meat_kg": 66.0, "feed_kg": 121.0, "fcr": 1.83, "mortality_pct": 0.8,
              "report_discipline_pct": 66.7},
         )
         self.assertEqual(data["top_households"], [])  # only 2 reports (< 3)
@@ -150,12 +161,14 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         self.assertEqual(self.household_stats(), before)
 
     def test_backdated_movement_changes_past_days(self):
-        move(self.admin, self.layer, self.household, MovementType.DEATH, 10, date(2026, 11, 1))
+        move(self.admin, self.breeder, self.household, MovementType.DEATH, 10, date(2026, 11, 1))
         data = self.household_stats()
         self.assertEqual([row["birds"] for row in data["series"]], [490, 486, 586])
         self.assertEqual(data["kpis"]["deaths"]["value"], 14)
-        # 810 eggs / (490 + 486) layer bird-days.
-        self.assertEqual(data["kpis"]["laying_rate_pct"]["value"], 83.0)
+        # Weight (1800×490 + 2000×586) / 1076 = 1908.92; meat per bird 66 × 3 / 1562 = 0.12676; FCR unchanged.
+        self.assertEqual(data["kpis"]["avg_weight_g"]["value"], 1908.9)
+        self.assertEqual(data["kpis"]["meat_per_bird_kg"]["value"], 0.127)
+        self.assertEqual(data["kpis"]["fcr"]["value"], 1.83)
 
     def test_inactive_household(self):
         self.household.is_active = False
@@ -164,7 +177,7 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         self.assertEqual(data["discipline"], {"expected": 0, "reported": 0, "missing": 0})
         self.assertEqual(data["missing_days"], [])
         self.assertIsNone(data["kpis"]["report_discipline_pct"]["value"])
-        self.assertEqual(data["kpis"]["eggs"]["value"], 810)
+        self.assertEqual(data["kpis"]["meat_kg"]["value"], 66.0)
 
     def test_household_created_after_period_start(self):
         created_on(self.household, date(2026, 11, 2))
@@ -173,12 +186,12 @@ class WorkedExampleAPITests(FrozenClockTestCase):
         self.assertEqual([row["expected"] for row in data["series"]], [False, True, True])
 
     def test_batch_stats(self):
-        move(self.admin, self.layer, None, MovementType.DEATH, 3, date(2026, 11, 2))
-        move(self.admin, self.layer, None, MovementType.OUT, 7, date(2026, 11, 3))
-        move(self.admin, self.layer, self.household, MovementType.RETURN, 6, date(2026, 11, 3))
-        move(self.admin, self.layer, self.household, MovementType.OUT, 5, date(2026, 11, 4))
+        move(self.admin, self.breeder, None, MovementType.DEATH, 3, date(2026, 11, 2))
+        move(self.admin, self.breeder, None, MovementType.OUT, 7, date(2026, 11, 3))
+        move(self.admin, self.breeder, self.household, MovementType.RETURN, 6, date(2026, 11, 3))
+        move(self.admin, self.breeder, self.household, MovementType.OUT, 5, date(2026, 11, 4))
         self.login_as(self.warehouse)
-        data = self.client.get(f"/api/batches/{self.layer.pk}/stats").json()
+        data = self.client.get(f"/api/batches/{self.breeder.pk}/stats").json()
         totals = data["totals"]
         self.assertEqual(
             totals,
@@ -208,7 +221,7 @@ class WorkedExampleAPITests(FrozenClockTestCase):
               "is_active": True, "count_now": 485, "distributed": 500, "returned": 6, "deaths": 4, "out": 5,
               "mortality_pct": 0.8}],
         )
-        explicit = self.client.get(f"/api/batches/{self.layer.pk}/stats?date_from=2026-10-10&date_to=2026-10-16").json()
+        explicit = self.client.get(f"/api/batches/{self.breeder.pk}/stats?date_from=2026-10-10&date_to=2026-10-16").json()
         self.assertEqual([row["center_stock"] for row in explicit["series"]], [0, 0, 0, 0, 0, 1000, 1000])
         self.assertNotIn("previous_from", explicit["period"])
 
@@ -359,35 +372,39 @@ class RankingTests(FrozenClockTestCase):
     @classmethod
     def setUpTestData(cls):
         cls.admin, cls.warehouse = staff()
-        layer = batch(cls.admin, 10_000, date(2026, 10, 1))
+        flock = batch(cls.admin, 10_000, date(2026, 10, 1), PoultryType.BROILER)
         cls.households = []
-        # eggs per day for 100 layer birds → laying rate 50 … 90 %; household 7 has only 2 reports.
-        for index, eggs in enumerate([50, 90, 70, 90, 60, 80, 85]):
+        # 10 kg feed a day and this much meat → FCR 2.5, 1.25, 2.0, 1.25, 2.22, 1.6, 1.43; household 6 has 2 reports.
+        for index, meat in enumerate(["4", "8", "5", "8", "4.5", "6.25", "7"]):
             household = make_household(f"Uy {index}", f"rank_owner{index}")
             created_on(household, date(2026, 10, 1))
-            move(cls.admin, layer, household, MovementType.DISTRIBUTE, 100, date(2026, 10, 2))
+            move(cls.admin, flock, household, MovementType.DISTRIBUTE, 100, date(2026, 10, 2))
             days = 2 if index == 6 else 3 + (index == 3)
             for offset in range(days):
-                report(household, date(2026, 11, 1 + offset), eggs, "10")
+                report(household, date(2026, 11, 1 + offset), meat, "10", weight="2100" if index == 3 else None)
             cls.households.append(household)
         cls.households[4].is_active = False
         cls.households[4].save()
-        move(cls.admin, layer, cls.households[0], MovementType.DEATH, 9, date(2026, 11, 2))
-        move(cls.admin, layer, cls.households[2], MovementType.DEATH, 1, date(2026, 11, 2))
+        move(cls.admin, flock, cls.households[0], MovementType.DEATH, 9, date(2026, 11, 2))
+        move(cls.admin, flock, cls.households[2], MovementType.DEATH, 1, date(2026, 11, 2))
 
     def test_top_bottom_and_high_mortality(self):
         self.login_as(self.admin)
         data = self.client.get("/api/stats/overview?date_from=2026-11-01&date_to=2026-11-04").json()
         ids = [h.pk for h in self.households]
         top = [row["household"]["id"] for row in data["top_households"]]
-        # 90 % twice: household 3 has more eggs (4 reports) than household 1, then 80 %, 70 %, 60 %.
+        # Lowest FCR first; 1.25 twice: household 3 has more meat (4 reports) than household 1, then 1.6, 2.0, 2.22.
         self.assertEqual(top, [ids[3], ids[1], ids[5], ids[2], ids[4]])
         self.assertEqual([row["household"]["id"] for row in data["bottom_households"]], [ids[0]])
         first = data["top_households"][0]
-        self.assertEqual((first["laying_rate_pct"], first["eggs"], first["reports"], first["layer_birds_avg"]),
-                         (90.0, 360, 4, 100.0))
+        self.assertEqual(
+            first,
+            {"household": {"id": ids[3], "code": self.households[3].code, "name": "Uy 3"}, "district": "Navobod tumani",
+             "is_active": True, "fcr": 1.25, "meat_kg": 32.0, "feed_kg": 40.0, "reports": 4, "avg_weight_g": 2100.0},
+        )
+        self.assertEqual(data["top_households"][1]["avg_weight_g"], None)
         bottom = data["bottom_households"][0]
-        self.assertEqual(bottom["laying_rate_pct"], 53.2)  # 150 eggs / (100 + 91 + 91) layer bird-days
+        self.assertEqual((bottom["fcr"], bottom["meat_kg"], bottom["feed_kg"]), (2.5, 12.0, 30.0))  # 30 kg / 12 kg
         self.assertEqual(data["households"], {"total": 7, "active": 6, "with_birds": 7, "reporting": 7})
         high = data["high_mortality"]
         self.assertEqual(high["count"], 1)
@@ -416,8 +433,9 @@ class EmptyDataTests(FrozenClockTestCase):
         self.login_as(self.admin)
         overview = self.client.get("/api/stats/overview").json()
         self.assertEqual(len(overview["series"]), 30)
-        self.assertEqual(overview["kpis"]["eggs"], {"value": 0, "previous": 0, "delta": None, "delta_unit": "%"})
-        self.assertIsNone(overview["kpis"]["laying_rate_pct"]["value"])
+        self.assertEqual(overview["kpis"]["meat_kg"], {"value": 0.0, "previous": 0.0, "delta": None, "delta_unit": "%"})
+        self.assertIsNone(overview["kpis"]["fcr"]["value"])
+        self.assertIsNone(overview["kpis"]["avg_weight_g"]["value"])
         self.assertEqual(overview["by_district"], [])
         self.assertEqual(overview["center"], {"birds_end": 0, "deaths": 0, "out": 0})
         warehouse = self.client.get("/api/warehouse/stats?date_from=2000-01-01&date_to=2000-12-31").json()
@@ -504,12 +522,12 @@ class BotSummaryTests(FrozenClockTestCase):
         cls.admin, cls.warehouse = staff()
         data = worked_example(cls.admin)
         cls.household = data["household"]
-        cls.layer = data["layer"]
+        cls.breeder = data["breeder"]
         User.objects.filter(pk=cls.household.owner_id).update(telegram_id=5001, must_change_password=False)
         User.objects.filter(pk=cls.admin.pk).update(telegram_id=5002)
         User.objects.filter(pk=cls.warehouse.pk).update(telegram_id=5003)
-        report(cls.household, date(2026, 11, 4), 395, "60.50", deaths=2)
-        move(cls.admin, cls.layer, None, MovementType.DEATH, 1, date(2026, 11, 4))
+        report(cls.household, date(2026, 11, 4), "30.25", "60.50", deaths=2, weight="2100")
+        move(cls.admin, cls.breeder, None, MovementType.DEATH, 1, date(2026, 11, 4))
         cls.other = make_household("Bo‘sh uy", "owner_empty")
         make_product("Yem PK-1", min_stock="100")  # balance 0 ≤ 100 → low
 
@@ -524,20 +542,20 @@ class BotSummaryTests(FrozenClockTestCase):
         self.assertEqual(data["household"], {"id": self.household.pk, "code": self.household.code,
                                              "name": "Navbahor 12-uy"})
         self.assertEqual(data["bird_count"], 594)
-        self.assertEqual(data["today"], {"report_submitted": True, "eggs": 395, "feed_kg": 60.5, "meat_kg": None,
-                                         "deaths": 2})
+        self.assertEqual(data["today"], {"report_submitted": True, "feed_kg": 60.5, "meat_kg": 30.25,
+                                         "avg_weight_g": 2100.0, "deaths": 2})
         week = data["last_7d"]
         self.assertEqual((week["date_from"], week["date_to"], week["days"]), ("2026-10-29", "2026-11-04", 7))
-        self.assertEqual((week["reports"], week["reported"], week["expected"], week["eggs"], week["feed_kg"],
-                          week["deaths"]), (3, 3, 7, 1205, 181.5, 6))
-        # (410 + 400 + 395) / (500 + 496 + 494) layer bird-days
-        self.assertEqual(week["laying_rate_pct"], 80.9)
+        self.assertEqual((week["reports"], week["reported"], week["expected"], week["meat_kg"], week["feed_kg"],
+                          week["deaths"]), (3, 3, 7, 96.25, 181.5, 6))
+        # FCR 181.5 / 96.25 = 1.8857; weight (1800×500 + 2000×596 + 2100×594) / (500 + 596 + 594) = 1976.04
+        self.assertEqual((week["fcr"], week["avg_weight_g"]), (1.89, 1976.0))
 
     def test_owner_without_report_today(self):
         DailyReport.objects.filter(date=date(2026, 11, 4)).delete()
         data = self.summary(5001).json()
-        self.assertEqual(data["today"], {"report_submitted": False, "eggs": None, "feed_kg": None, "meat_kg": None,
-                                         "deaths": 2})
+        self.assertEqual(data["today"], {"report_submitted": False, "feed_kg": None, "meat_kg": None,
+                                         "avg_weight_g": None, "deaths": 2})
         # Today is not over: without a report it is not (yet) an expected day.
         week = data["last_7d"]
         self.assertEqual((week["reports"], week["reported"], week["expected"]), (2, 2, 6))
@@ -549,7 +567,7 @@ class BotSummaryTests(FrozenClockTestCase):
             data["today"],
             # "Bo‘sh uy" is active but has no birds: not due today (same rule as series[today]).
             {"households_active": 2, "households_expected": 1, "households_reported": 1,
-             "report_discipline_pct": 100.0, "eggs": 395, "feed_kg": 60.5, "meat_kg": 0.0, "laying_rate_pct": 80.0,
+             "report_discipline_pct": 100.0, "feed_kg": 60.5, "meat_kg": 30.25, "fcr": 2.0,
              "deaths": 2,
              "deaths_center": 1, "birds_in_households": 594, "birds_in_center": 699, "birds_total": 1293,
              "low_stock_count": 1},
@@ -562,10 +580,10 @@ class BotSummaryTests(FrozenClockTestCase):
         self.login_as(self.admin)
         day = self.client.get("/api/stats/overview?date_from=2026-11-04").json()["series"][-1]
         self.assertEqual(
-            (today["households_reported"], today["households_expected"], today["eggs"], today["feed_kg"],
-             today["deaths"], today["laying_rate_pct"]),
-            (day["reported_expected"], day["expected_reports"], day["eggs"], day["feed_kg"], day["deaths"],
-             day["laying_rate_pct"]),
+            (today["households_reported"], today["households_expected"], today["meat_kg"], today["feed_kg"],
+             today["deaths"], today["fcr"]),
+            (day["reported_expected"], day["expected_reports"], day["meat_kg"], day["feed_kg"], day["deaths"],
+             day["fcr"]),
         )
 
     def test_owner_week_equals_web_discipline(self):

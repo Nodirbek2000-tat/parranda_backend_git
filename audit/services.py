@@ -145,7 +145,6 @@ def _report_snapshot(report: DailyReport) -> dict[str, Any]:
         "date": report.date,
         "bird_count": report.bird_count,
         "feed_kg": report.feed_kg,
-        "eggs": report.eggs,
         "meat_kg": report.meat_kg,
         "deaths": report.deaths,
         "avg_weight_g": report.avg_weight_g,

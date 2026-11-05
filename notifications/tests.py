@@ -77,7 +77,7 @@ class NotificationEngineTests(BaseAPITestCase):
             "\n"
             f"Xonadon: Navbahor 12-uy ({self.household_a.code})\n"
             "Mas’ul: Bobur Aliyev\n"
-            "Parranda turi: Tuxum yo‘nalishi\n"
+            "Parranda turi: Go‘sht yo‘nalishi\n"
             "Miqdori: 500 dona\n"
             f"Partiya: {self.batch.code}\n"
             f"Sana: {timezone.localdate():%d.%m.%Y}\n"
@@ -114,7 +114,7 @@ class NotificationEngineTests(BaseAPITestCase):
 
         self.login_as(self.owner_a)
         with self.captureOnCommitCallbacks(execute=True):
-            self.client.post("/api/daily-reports", {"feed_kg": 10, "eggs": 100, "deaths": 2}, format="json")
+            self.client.post("/api/daily-reports", {"feed_kg": 10, "meat_kg": 5, "deaths": 2}, format="json")
         report = Notification.objects.get(event="daily_report", chat_id__isnull=False)
         self.assertEqual(report.recipient_id, self.admin.pk)
         self.assertIn("📝 <b>NNP — KUNLIK HISOBOT</b>", report.text)

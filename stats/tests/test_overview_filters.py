@@ -16,13 +16,13 @@ class OverviewFilterTests(BaseAPITestCase):
     def setUpTestData(cls):
         super().setUpTestData()
         Household.objects.filter(pk=cls.household_b.pk).update(region="Buxoro viloyati", district="Kogon tumani")
-        broilers = make_batch(cls.admin, 400, PoultryType.BROILER)
-        distribute(cls.admin, broilers, cls.household_b, 150)
+        breeders = make_batch(cls.admin, 400, PoultryType.BREEDER)
+        distribute(cls.admin, breeders, cls.household_b, 150)
         today = timezone.localdate()
         DailyReport.objects.create(household=cls.household_a, date=today - timedelta(days=1), bird_count=300,
-                                   feed_kg=Decimal("30"), eggs=250, deaths=0, created_by=cls.admin)
+                                   feed_kg=Decimal("30"), deaths=0, created_by=cls.admin)
         DailyReport.objects.create(household=cls.household_b, date=today - timedelta(days=1), bird_count=350,
-                                   feed_kg=Decimal("40"), eggs=100, deaths=0, created_by=cls.admin,
+                                   feed_kg=Decimal("40"), deaths=0, created_by=cls.admin,
                                    meat_kg=Decimal("62.5"), avg_weight_g=Decimal("2100"))
 
     def setUp(self):
@@ -31,7 +31,10 @@ class OverviewFilterTests(BaseAPITestCase):
 
     def test_meat_series_and_totals(self):
         data = self.client.get("/api/stats/overview").data
-        self.assertEqual(data["meat"], {"total_kg": 62.5, "previous_total_kg": 0.0, "avg_weight_g": 2100.0})
+        kpis = data["kpis"]
+        self.assertEqual(kpis["meat_kg"], {"value": 62.5, "previous": 0.0, "delta": None, "delta_unit": "%"})
+        self.assertEqual(kpis["avg_weight_g"]["value"], 2100.0)  # household A stated no weight
+        self.assertEqual(kpis["fcr"]["value"], 1.12)  # (30 + 40) / 62.5
         self.assertEqual(sum(day["meat_kg"] for day in data["series"]), 62.5)
         self.assertEqual(data["filters"], {})
 
@@ -40,12 +43,14 @@ class OverviewFilterTests(BaseAPITestCase):
         self.assertEqual(everyone["households"]["total"], 2)
         samarqand = self.client.get("/api/stats/overview?region=Samarqand viloyati").data
         self.assertEqual(samarqand["households"]["total"], 1)
-        self.assertEqual(samarqand["kpis"]["eggs"]["value"], 250)
-        self.assertEqual(samarqand["meat"]["total_kg"], 0.0)
+        self.assertEqual(samarqand["kpis"]["feed_kg"]["value"], 30.0)
+        self.assertEqual(samarqand["kpis"]["meat_kg"]["value"], 0.0)
+        self.assertIsNone(samarqand["kpis"]["fcr"]["value"])
         self.assertEqual(samarqand["filters"], {"region": "Samarqand viloyati"})
-        broiler = self.client.get("/api/stats/overview?poultry_type=BROILER").data
-        self.assertEqual(broiler["households"]["total"], 1)
-        self.assertEqual(broiler["meat"]["total_kg"], 62.5)
+        breeder = self.client.get("/api/stats/overview?poultry_type=BREEDER").data
+        self.assertEqual(breeder["households"]["total"], 1)
+        self.assertEqual(breeder["kpis"]["meat_kg"]["value"], 62.5)
+        self.assertEqual(self.client.get("/api/stats/overview?poultry_type=BROILER").data["households"]["total"], 2)
         district = self.client.get("/api/stats/overview?district=Kogon tumani").data
         self.assertEqual(district["households"]["total"], 1)
 

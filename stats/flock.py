@@ -17,10 +17,9 @@ from datetime import date, timedelta
 
 from farm.models import PoultryType
 
-from .metrics import Totals, layer_feed_share_cents
+from .metrics import Totals
 
-POULTRY_TYPES: tuple[str, ...] = (PoultryType.LAYER, PoultryType.BROILER, PoultryType.BREEDER)
-LAYER = PoultryType.LAYER
+POULTRY_TYPES: tuple[str, ...] = (PoultryType.BROILER, PoultryType.BREEDER)
 
 
 class Step:
@@ -178,7 +177,6 @@ class FlockWindow:
 class HouseholdState:
     meta: HouseholdMeta
     all: Step
-    layer: Step | None
     by_type: dict[str, Step]
     created_index: int
     current: Totals = field(default_factory=Totals)
@@ -191,8 +189,7 @@ class DailySeries:
     """Per-day sums of the current period (index 0 = first day of the period)."""
 
     birds: list[int]
-    layer_birds: list[int]
-    eggs: list[int]
+    meat_cents: list[int]
     feed_cents: list[int]
     deaths: list[int]
     distributed: list[int]
@@ -200,19 +197,20 @@ class DailySeries:
     reports: list[int]
     expected: list[int]
     reported_expected: list[int]
-    rl_eggs: list[int]
-    rl_layer_days: list[int]
+    weight_bird_cents: list[int]
+    weighed_bird_days: list[int]
 
     @classmethod
     def empty(cls, days: int) -> DailySeries:
-        return cls(*([0] * days for _ in range(12)))
+        return cls(*([0] * days for _ in range(11)))
 
 
 class ScopeStats:
     """Aggregates of a set of households for the current period (and optionally the previous one).
 
     ``current = (first, last)`` and ``previous`` are inclusive day-index ranges inside the window.
-    Report rows: ``(household_id, day index from window.start, eggs, feed_cents)`` (see ``queries.report_rows``).
+    Report rows: ``(household_id, day index from window.start, meat_cents, feed_cents, weight_cents)``
+    (see ``queries.report_rows``; ``weight_cents < 0`` = no weight stated).
 
     ``today`` (V2 §1.1 “today is not over”): when the current period contains today, today is an expected
     day of the PERIOD aggregates (``Totals.expected`` / ``reported_expected`` → discipline, missing days)
@@ -224,7 +222,7 @@ class ScopeStats:
         self,
         window: FlockWindow,
         households: Iterable[HouseholdMeta],
-        reports: Iterable[tuple[int, int, int, int]],
+        reports: Iterable[tuple[int, int, int, int, int]],
         *,
         current: tuple[int, int],
         previous: tuple[int, int] | None = None,
@@ -243,7 +241,6 @@ class ScopeStats:
             self.states[meta.id] = HouseholdState(
                 meta=meta,
                 all=window.step_all(meta.id),
-                layer=by_type.get(LAYER),
                 by_type=by_type,
                 created_index=window.index(meta.created_day),
             )
@@ -270,7 +267,6 @@ class ScopeStats:
         first, last = self.current
         series = self.series
         birds_delta = [0] * (self.days + 1)
-        layer_delta = [0] * (self.days + 1)
         expected_delta = [0] * (self.days + 1)
         for state in self.states.values():
             self._fill_movements(state, state.current, first, last)
@@ -287,10 +283,6 @@ class ScopeStats:
             for lo, hi, value in state.all._segments(first, last):
                 birds_delta[lo - first] += value
                 birds_delta[hi - first + 1] -= value
-            if state.layer is not None:
-                for lo, hi, value in state.layer._segments(first, last):
-                    layer_delta[lo - first] += value
-                    layer_delta[hi - first + 1] -= value
             if state.meta.is_active:
                 for lo, hi in state.all.positive_ranges(max(first, state.created_index), last):
                     expected_delta[lo - first] += 1
@@ -301,41 +293,37 @@ class ScopeStats:
                     series.deaths[j] += flow.deaths
                     series.distributed[j] += flow.distributed
                     series.returned[j] += flow.returned
-        running_birds = running_layer = running_expected = 0
+        running_birds = running_expected = 0
         for j in range(self.days):
             running_birds += birds_delta[j]
-            running_layer += layer_delta[j]
             running_expected += expected_delta[j]
             series.birds[j] = running_birds
-            series.layer_birds[j] = running_layer
             series.expected[j] = running_expected
 
     # -- reports -----------------------------------------------------------------------------
 
-    def _report_totals(self, reports: Iterable[tuple[int, int, int, int]]) -> None:
-        """One pass over ``(household_id, day index, eggs, feed_cents)`` rows (the hot loop: ~70k rows/year)."""
+    def _report_totals(self, reports: Iterable[tuple[int, int, int, int, int]]) -> None:
+        """One pass over ``(household_id, day index, meat_cents, feed_cents, weight_cents)`` rows (the hot loop:
+        ~70k rows/year)."""
         current_first, current_last = self.current
         previous_first, previous_last = self.previous if self.previous is not None else (1, 0)
         series = self.series
         never = self.window.length + 1
         lookup = {}
         for household_id, state in self.states.items():
-            layer = state.layer
             lookup[household_id] = (
                 state,
                 state.all.starts,
                 state.all.values,
-                layer.starts if layer is not None else None,
-                layer.values if layer is not None else None,
                 state.created_index if state.meta.is_active else never,
             )
         self.reported_days: set[int] = set()  # current-period indices with a report (single household use)
         today_index = self.today_index if self.today_index is not None else -1
-        for household_id, index, eggs, feed_cents in reports:
+        for household_id, index, meat_cents, feed_cents, weight_cents in reports:
             entry = lookup.get(household_id)
             if entry is None:
                 continue
-            state, starts, values, layer_starts, layer_values, expected_from = entry
+            state, starts, values, expected_from = entry
             if current_first <= index <= current_last:
                 totals = state.current
                 j = index - current_first
@@ -345,18 +333,13 @@ class ScopeStats:
             else:
                 continue
             birds = values[0] if len(starts) == 1 else values[bisect_right(starts, index) - 1]
-            if layer_starts is None:
-                layers = 0
-            else:
-                layers = layer_values[0] if len(layer_starts) == 1 else layer_values[bisect_right(layer_starts, index) - 1]
-            totals.eggs += eggs
+            totals.meat_cents += meat_cents
             totals.feed_cents += feed_cents
             totals.reports += 1
-            if layers > 0:
-                totals.rl_eggs += eggs
-                totals.rl_layer_days += layers
-                totals.rl_reports += 1
-                totals.rl_feed_cents += layer_feed_share_cents(feed_cents, layers, birds)
+            weighed = birds > 0 and weight_cents >= 0
+            if weighed:
+                totals.weight_bird_cents += weight_cents * birds
+                totals.weighed_bird_days += birds
             due = False
             if birds > 0:
                 totals.rp_feed_cents += feed_cents
@@ -367,15 +350,15 @@ class ScopeStats:
                     if index == today_index:
                         totals.expected += 1  # today counts once its report exists
             if j >= 0:
-                series.eggs[j] += eggs
+                series.meat_cents[j] += meat_cents
                 series.feed_cents[j] += feed_cents
                 series.reports[j] += 1
                 self.reported_days.add(j)
                 if due:
                     series.reported_expected[j] += 1
-                if layers > 0:
-                    series.rl_eggs[j] += eggs
-                    series.rl_layer_days[j] += layers
+                if weighed:
+                    series.weight_bird_cents[j] += weight_cents * birds
+                    series.weighed_bird_days[j] += birds
 
     # -- helpers -----------------------------------------------------------------------------
 

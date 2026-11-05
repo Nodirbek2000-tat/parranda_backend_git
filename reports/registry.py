@@ -49,7 +49,7 @@ REPORTS: tuple[ReportDef, ...] = (
     ReportDef(
         "daily_production",
         "Kunlik ishlab chiqarish",
-        "Har bir kunlik hisobot: parranda soni, tuxum, tuxumdorlik, yem, go‘sht va nobud bo‘lish.",
+        "Har bir kunlik hisobot: parranda soni, yem, go‘sht, FCR (yem/go‘sht), o‘rtacha vazn va nobud bo‘lish.",
         frozenset({A, W, O}),
         ALL_FILTERS,
         builders.daily_production,
@@ -57,7 +57,7 @@ REPORTS: tuple[ReportDef, ...] = (
     ReportDef(
         "monthly_production",
         "Oylik ishlab chiqarish",
-        "Oylar kesimida tuxum, tuxumdorlik, yem sarfi, go‘sht va o‘lim ko‘rsatkichlari.",
+        "Oylar kesimida go‘sht, yem sarfi, FCR, parranda boshiga go‘sht, o‘rtacha vazn va o‘lim ko‘rsatkichlari.",
         frozenset({A, W, O}),
         ALL_FILTERS,
         builders.monthly_production,
@@ -91,7 +91,7 @@ REPORTS: tuple[ReportDef, ...] = (
     ReportDef(
         "feed_consumption",
         "Yem sarfi",
-        "Hisobotlardagi yem sarfi va ombordan berilgan yem, parranda va tuxum boshiga sarf.",
+        "Hisobotlardagi yem sarfi va ombordan berilgan yem, parranda boshiga kunlik sarf va FCR (yem/go‘sht).",
         frozenset({A, W}),
         NO_POULTRY,
         builders.feed_consumption,

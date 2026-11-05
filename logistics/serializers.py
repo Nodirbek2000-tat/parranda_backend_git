@@ -127,7 +127,9 @@ class DriverWriteSerializer(serializers.Serializer):
     full_name = serializers.CharField(min_length=3, max_length=200)
     phone = serializers.CharField(max_length=32, validators=[validate_phone])
     license_no = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
-    user = PrimaryKeyField(queryset=User.objects.all(), required=False, allow_null=True, default=None)
+    user = PrimaryKeyField(
+        queryset=User.objects.filter(deleted_at__isnull=True), required=False, allow_null=True, default=None
+    )
     is_active = serializers.BooleanField(required=False, default=True)
     note = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
 

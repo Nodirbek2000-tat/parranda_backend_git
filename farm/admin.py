@@ -57,7 +57,7 @@ class PoultryMovementAdmin(ReadOnlyAdmin):
 
 @admin.register(DailyReport)
 class DailyReportAdmin(ReadOnlyAdmin):
-    list_display = ("household", "date", "bird_count", "eggs", "feed_kg", "deaths", "created_by")
+    list_display = ("household", "date", "bird_count", "meat_kg", "feed_kg", "avg_weight_g", "deaths", "created_by")
     list_filter = ("date",)
     search_fields = ("household__name",)
     list_select_related = ("household", "created_by")

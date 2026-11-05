@@ -18,6 +18,10 @@ class User(AbstractUser):
     # Set when every session is ended (admin "end sessions", logout with all=true): a Telegram
     # initData signed before this moment cannot log in again (accounts/views.py TelegramAuthView).
     sessions_revoked_at = models.DateTimeField("Sessiyalar yakunlangan vaqt", null=True, blank=True, editable=False)
+    # Set when an admin deletes the account. The row stays (stock operations, orders, audit and
+    # other history keep pointing to it), but it is blocked, unlinked from Telegram, hidden from
+    # every user list and its login name is freed (accounts/services.py delete_user).
+    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
 
     class Meta(AbstractUser.Meta):
         verbose_name = "Foydalanuvchi"

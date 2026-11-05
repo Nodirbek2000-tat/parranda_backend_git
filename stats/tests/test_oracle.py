@@ -30,7 +30,7 @@ from warehouse.models import Product, ProductCategory, StockTransaction, Unit
 
 from .helpers import TASHKENT, TODAY, FrozenClockTestCase, local_dt
 
-TYPES = (PoultryType.LAYER, PoultryType.BROILER, PoultryType.BREEDER)
+TYPES = (PoultryType.BROILER, PoultryType.BREEDER)
 CATEGORY_ORDER = list(ProductCategory.values)
 UNIT_ORDER = list(Unit.values)
 
@@ -77,8 +77,14 @@ class Oracle:
             (m.household_id, m.batch.poultry_type, m.type, m.quantity, m.date, m.batch_id)
             for m in PoultryMovement.objects.select_related("batch")
         ]
+        # (meat kg — 0 when not stated, feed kg, average weight g or None)
         self.reports = {
-            (r.household_id, r.date): (r.eggs, Fraction(r.feed_kg)) for r in DailyReport.objects.all()
+            (r.household_id, r.date): (
+                Fraction(r.meat_kg) if r.meat_kg is not None else Fraction(0),
+                Fraction(r.feed_kg),
+                Fraction(r.avg_weight_g) if r.avg_weight_g is not None else None,
+            )
+            for r in DailyReport.objects.all()
         }
         self.meat = defaultdict(Fraction)
         self.meat_by: dict = {}
@@ -112,9 +118,10 @@ class Oracle:
     def values(self, H, dates):
         N = len(dates)
         bird_days = sum(self.B(h, d) for h in H for d in dates)
-        eggs = feed = reports = 0
-        rl_eggs = rl_l = 0
-        rl_feed = Fraction(0)
+        meat = feed = Fraction(0)
+        reports = 0
+        weight_b = Fraction(0)
+        weighed_b = 0
         rp_feed = Fraction(0)
         rp_b = 0
         expected = reported_expected = 0
@@ -126,19 +133,16 @@ class Oracle:
                 expected += exp and (d < TODAY or rep is not None)
                 if rep is None:
                     continue
-                e, f = rep
-                eggs += e
+                m, f, w = rep
+                meat += m
                 feed += f
                 reports += 1
                 if exp:
                     reported_expected += 1
                 b = self.B(h, d)
-                lay = self.B(h, d, PoultryType.LAYER)
-                if lay > 0:
-                    rl_eggs += e
-                    rl_l += lay
-                    # contract feed × L/B, share capped at 1 when other types are negative (B ≤ L)
-                    rl_feed += f if b <= lay else f * lay / b
+                if b > 0 and w is not None:
+                    weight_b += w * b
+                    weighed_b += b
                 if b > 0:
                     rp_feed += f
                     rp_b += b
@@ -147,28 +151,26 @@ class Oracle:
         return {
             "birds_end": sum(self.B(h, dates[-1]) for h in H),
             "birds_avg": birds_avg,
-            "eggs": eggs,
+            "meat_kg": meat,
             "feed_kg": feed,
             "deaths": deaths,
             "distributed": self.flows(H, dates, MovementType.DISTRIBUTE),
             "returned": self.flows(H, dates, MovementType.RETURN),
             "reports": reports,
-            "laying_rate_pct": pct(rl_eggs, rl_l),
-            "feed_per_egg_g": None if not rl_eggs else 1000 * rl_feed / rl_eggs,
+            "fcr": div(feed, meat),
+            "meat_per_bird_kg": None if not birds_avg else meat / birds_avg,
+            "avg_weight_g": div(weight_b, weighed_b),
             "feed_per_bird_day_kg": div(rp_feed, rp_b),
             "mortality_pct": None if not birds_avg else 100 * deaths / birds_avg,
             "report_discipline_pct": pct(reported_expected, expected),
             "_expected": expected,
             "_reported_expected": reported_expected,
-            "_rl_eggs": rl_eggs,
-            "_rl_l": rl_l,
-            "_rl_count": None,
         }
 
     SPEC = {
-        "birds_end": (None, "%"), "birds_avg": (1, "%"), "eggs": (None, "%"), "feed_kg": (2, "%"),
+        "birds_end": (None, "%"), "birds_avg": (1, "%"), "meat_kg": (2, "%"), "feed_kg": (2, "%"),
         "deaths": (None, "%"), "distributed": (None, "%"), "returned": (None, "%"), "reports": (None, "%"),
-        "laying_rate_pct": (1, "pp"), "feed_per_egg_g": (1, "%"), "feed_per_bird_day_kg": (3, "%"),
+        "fcr": (2, "%"), "meat_per_bird_kg": (3, "%"), "avg_weight_g": (1, "%"), "feed_per_bird_day_kg": (3, "%"),
         "mortality_pct": (1, "pp"), "report_discipline_pct": (1, "pp"),
     }
 
@@ -192,18 +194,19 @@ class Oracle:
 
     def day_series(self, H, d):
         reps = [(h, self.reports[(h, d)]) for h in H if (h, d) in self.reports]
-        rl_e = sum(e for h, (e, f) in reps if self.B(h, d, PoultryType.LAYER) > 0)
-        rl_l = sum(self.B(h, d, PoultryType.LAYER) for h, _ in reps if self.B(h, d, PoultryType.LAYER) > 0)
+        meat = sum((m for _, (m, _f, _w) in reps), Fraction(0))
+        feed = sum((f for _, (_m, f, _w) in reps), Fraction(0))
+        weighed = [(w, self.B(h, d)) for h, (_m, _f, w) in reps if w is not None and self.B(h, d) > 0]
         return {
             "date": d.isoformat(),
             "birds": sum(self.B(h, d) for h in H),
-            "layer_birds": sum(self.B(h, d, PoultryType.LAYER) for h in H),
-            "eggs": sum(e for _, (e, f) in reps),
-            "feed_kg": rhu(sum((f for _, (e, f) in reps), Fraction(0)), 2),
+            "meat_kg": rhu(meat, 2),
+            "feed_kg": rhu(feed, 2),
+            "avg_weight_g": rhu(div(sum((w * b for w, b in weighed), Fraction(0)), sum(b for _, b in weighed)), 1),
+            "fcr": rhu(div(feed, meat), 2),
             "deaths": self.flows(H, [d], MovementType.DEATH),
             "distributed": self.flows(H, [d], MovementType.DISTRIBUTE),
             "returned": self.flows(H, [d], MovementType.RETURN),
-            "laying_rate_pct": rhu(pct(rl_e, rl_l), 1),
         }, len(reps)
 
     def type_row(self, H, dates, t):
@@ -266,7 +269,6 @@ class Oracle:
             row["reports"] = count
             row["reported_expected"] = sum(1 for h in H if (h, d) in self.reports and self.expected(h, d))
             row["expected_reports"] = sum(1 for h in H if self.expected(h, d))
-            row["meat_kg"] = rhu(self.meat.get(d, Fraction(0)), 2)
             series.append(row)
         center = sum(b.initial_quantity for b in self.batches if b.arrived_at <= date_to)
         for hid, _t, kind, qty, mdate, _b in self.moves:
@@ -297,28 +299,26 @@ class Oracle:
             by_district.append({
                 "region": region, "district": district, "households": len(members),
                 "households_active": sum(1 for h in members if self.households[h].is_active),
-                "birds_end": v["birds_end"], "eggs": v["eggs"], "feed_kg": rhu(v["feed_kg"], 2),
-                "deaths": v["deaths"], "reports": v["reports"],
-                "laying_rate_pct": rhu(v["laying_rate_pct"], 1), "mortality_pct": rhu(v["mortality_pct"], 1),
+                "birds_end": v["birds_end"], "meat_kg": rhu(v["meat_kg"], 2), "feed_kg": rhu(v["feed_kg"], 2),
+                "fcr": rhu(v["fcr"], 2), "deaths": v["deaths"], "reports": v["reports"],
+                "mortality_pct": rhu(v["mortality_pct"], 1),
                 "report_discipline_pct": rhu(v["report_discipline_pct"], 1),
             })
         by_district.sort(key=lambda r: (-r["birds_end"], r["region"], r["district"]))
-        # ranking
+        # ranking by FCR (lower is better): ≥ 3 reports and meat > 0
         cands = []
         for h in H:
             v = self.values([h], dates)
-            rl = [(d) for d in dates if (h, d) in self.reports and self.B(h, d, PoultryType.LAYER) > 0]
-            if v["reports"] >= 3 and v["_rl_l"] > 0:
-                cands.append((h, v, len(rl)))
-        top = sorted(cands, key=lambda c: (-Fraction(c[1]["_rl_eggs"], c[1]["_rl_l"]), -c[1]["eggs"], c[0]))[:5]
+            if v["reports"] >= 3 and v["meat_kg"] > 0:
+                cands.append((h, v))
+        top = sorted(cands, key=lambda c: (c[1]["fcr"], -c[1]["meat_kg"], c[0]))[:5]
         top_ids = {c[0] for c in top}
-        bottom = [c for c in sorted(cands, key=lambda c: (Fraction(c[1]["_rl_eggs"], c[1]["_rl_l"]), c[0]))
-                  if c[0] not in top_ids][:5]
+        bottom = [c for c in sorted(cands, key=lambda c: (-c[1]["fcr"], c[0])) if c[0] not in top_ids][:5]
 
         def item(c):
-            h, v, n = c
-            return {"id": h, "laying_rate_pct": rhu(v["laying_rate_pct"], 1), "eggs": v["eggs"],
-                    "reports": v["reports"], "layer_birds_avg": rhu(Fraction(v["_rl_l"], n), 1),
+            h, v = c
+            return {"id": h, "fcr": rhu(v["fcr"], 2), "meat_kg": rhu(v["meat_kg"], 2), "feed_kg": rhu(v["feed_kg"], 2),
+                    "reports": v["reports"], "avg_weight_g": rhu(v["avg_weight_g"], 1),
                     "is_active": self.households[h].is_active}
 
         high = []
@@ -595,10 +595,13 @@ def build_fixture(seed: int):
             if rng.random() < 0.55:
                 continue
             feed = Decimal(rng.randint(0, 9000)) / 100
-            # Meat on some days (deterministic, no extra rng draws: the rest of the data stays the same).
-            meat = (feed / 3).quantize(Decimal("0.01")) if (h.pk + offset) % 4 == 0 else None
+            # Meat on 3 days of 4 with a household-specific conversion (deterministic, no extra rng draws).
+            conversion = Decimal(15 + h.pk % 7) / 10
+            meat = (feed / conversion).quantize(Decimal("0.01")) if (h.pk + offset) % 4 else None
+            draw = rng.randint(0, 600)
+            weight = Decimal(1000 + 3 * draw) / 2 if draw % 3 else None  # some days without a weighing
             DailyReport.objects.create(household=h, date=day, bird_count=rng.randint(0, 999), feed_kg=feed,
-                                       eggs=rng.randint(0, 600), deaths=0, created_by=admin, meat_kg=meat)
+                                       deaths=0, created_by=admin, meat_kg=meat, avg_weight_g=weight)
     # stock
     products = []
     specs = [("Yem A", "FEED", "kg"), ("Yem B", "FEED", "kg"), ("Yem qop", "FEED", "qop"),
@@ -678,8 +681,8 @@ class OracleMixin:
                     self.assertEqual(got_types, expected["by_poultry_type"])
                     self.assertEqual(data["by_district"], expected["by_district"])
                     for key, exp_key in (("top_households", "top"), ("bottom_households", "bottom")):
-                        got = [{"id": r["household"]["id"], "laying_rate_pct": r["laying_rate_pct"], "eggs": r["eggs"],
-                                "reports": r["reports"], "layer_birds_avg": r["layer_birds_avg"],
+                        got = [{"id": r["household"]["id"], "fcr": r["fcr"], "meat_kg": r["meat_kg"],
+                                "feed_kg": r["feed_kg"], "reports": r["reports"], "avg_weight_g": r["avg_weight_g"],
                                 "is_active": r["is_active"]} for r in data[key]]
                         self.assertEqual(got, expected[exp_key])
                     hm = data["high_mortality"]
@@ -778,4 +781,6 @@ class OracleFixtureSanityTests(FrozenClockTestCase):
         self.assertTrue(data["bottom_households"])
         self.assertTrue(data["high_mortality"]["items"])
         self.assertGreater(data["kpis"]["birds_end"]["value"], 0)
-        self.assertIsNotNone(data["kpis"]["feed_per_egg_g"]["value"])
+        self.assertIsNotNone(data["kpis"]["fcr"]["value"])
+        self.assertIsNotNone(data["kpis"]["avg_weight_g"]["value"])
+        self.assertGreater(data["kpis"]["meat_kg"]["value"], 0)

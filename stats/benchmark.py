@@ -25,7 +25,7 @@ from farm.models import DailyReport, Household, MovementType, PoultryBatch, Poul
 from warehouse.models import Product, ProductCategory, StockTransaction, StockTransactionType, Unit
 
 DISTRICTS = ("Navobod tumani", "Urgut tumani", "Pastdarg‘om tumani", "Jomboy tumani")
-BATCH_TYPES = (PoultryType.LAYER,) * 6 + (PoultryType.BROILER,) * 3 + (PoultryType.BREEDER,)
+BATCH_TYPES = (PoultryType.BROILER,) * 6 + (PoultryType.BREEDER,) * 3 + (PoultryType.BROILER,)
 
 
 @dataclass(frozen=True)
@@ -97,15 +97,15 @@ def build_dataset(size: DatasetSize = DatasetSize(), *, today: date | None = Non
                                              date=day, created_by=actor, created_at=_local(day, 39_600)))
 
         for index, household in enumerate(households):
-            layer = batches[index % 6]
-            movement(layer, household, MovementType.DISTRIBUTE, 400, arrived + timedelta(days=1))
+            main = batches[index % 6]
+            movement(main, household, MovementType.DISTRIBUTE, 400, arrived + timedelta(days=1))
             if index % 3 == 0:
                 movement(batches[6 + index % 3], household, MovementType.DISTRIBUTE, 200, arrived + timedelta(days=3))
             for _ in range(7):  # deaths spread over the whole history
                 day = first_day + timedelta(days=rng.randrange(size.report_days))
-                movement(layer, household, MovementType.DEATH, rng.randint(1, 3), day)
+                movement(main, household, MovementType.DEATH, rng.randint(1, 3), day)
             if index % 10 == 0:
-                movement(layer, household, MovementType.RETURN, 10, first_day + timedelta(days=size.report_days // 2))
+                movement(main, household, MovementType.RETURN, 10, first_day + timedelta(days=size.report_days // 2))
         for batch in batches:
             for _ in range(4):
                 day = first_day + timedelta(days=rng.randrange(size.report_days))
@@ -119,9 +119,11 @@ def build_dataset(size: DatasetSize = DatasetSize(), *, today: date | None = Non
                 if rng.random() < 0.04:
                     continue  # missing report
                 day = first_day + timedelta(days=offset)
-                eggs = rng.randint(300, 360)
                 feed = Decimal(rng.randint(4400, 5200) + (2800 if mixed else 0)).scaleb(-2)
-                reports.append(DailyReport(household=household, date=day, bird_count=0, feed_kg=feed, eggs=eggs,
+                meat = Decimal(rng.randint(2400, 3000)).scaleb(-2) if rng.random() < 0.5 else None
+                weight = Decimal(rng.randint(150_000, 260_000)).scaleb(-2) if rng.random() < 0.3 else None
+                reports.append(DailyReport(household=household, date=day, bird_count=0, feed_kg=feed, meat_kg=meat,
+                                           avg_weight_g=weight,
                                            created_by=household.owner, created_at=_local(day, 68_400)))
                 if len(reports) >= 5000:
                     DailyReport.objects.bulk_create(reports)

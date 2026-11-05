@@ -45,6 +45,7 @@ class AuditAction(models.TextChoices):
     UPLOAD = "upload", "Fayl yuklandi"
     RETRY = "retry", "Qayta yuborildi"
     EXPORT = "export", "Eksport"
+    DELETE = "delete", "O‘chirildi"
 
 
 class AuditSource(models.TextChoices):

@@ -10,7 +10,7 @@ from common.fields import PrimaryKeyField, latitude_field, longitude_field
 from . import selectors
 from .models import DailyReport, Household, MovementType, PoultryBatch, PoultryMovement
 
-#: Upper bound for any bird / egg count accepted by the API (keeps aggregates far from overflow).
+#: Upper bound for any bird count accepted by the API (keeps aggregates far from overflow).
 MAX_BIRDS = 10_000_000
 MAX_AGE_DAYS = 3650
 MSG_COORDINATES_TOGETHER = "Kenglik va uzunlik birga kiritilishi kerak"
@@ -271,7 +271,6 @@ class DailyReportSerializer(serializers.ModelSerializer):
             "date",
             "bird_count",
             "feed_kg",
-            "eggs",
             "meat_kg",
             "deaths",
             "avg_weight_g",
@@ -285,7 +284,7 @@ class DailyReportSerializer(serializers.ModelSerializer):
 class DailyReportCreateSerializer(serializers.Serializer):
     date = serializers.DateField(required=False, allow_null=True, default=None)
     feed_kg = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=0)
-    eggs = serializers.IntegerField(min_value=0, max_value=MAX_BIRDS)
+    # Main production output, optional (null = no meat output that day; API_CONTRACT §DailyReport).
     meat_kg = serializers.DecimalField(
         max_digits=10, decimal_places=2, min_value=0, required=False, allow_null=True, default=None
     )

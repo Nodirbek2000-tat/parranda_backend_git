@@ -167,7 +167,7 @@ class StaffFilterTests(BaseAPITestCase):
 
 class DashboardReportCountTests(BaseAPITestCase):
     def test_reports_of_deactivated_households_are_not_counted(self):
-        farm_services.create_daily_report(actor=self.owner_a, household=None, feed_kg=Decimal("1"), eggs=1)
+        farm_services.create_daily_report(actor=self.owner_a, household=None, feed_kg=Decimal("1"), meat_kg=Decimal("0.5"))
         Household.objects.filter(pk=self.household_a.pk).update(is_active=False)
         self.login_as(self.admin)
         data = self.client.get("/api/dashboard/admin").data

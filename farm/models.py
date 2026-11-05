@@ -57,7 +57,8 @@ class Household(models.Model):
 
 
 class PoultryType(models.TextChoices):
-    LAYER = "LAYER", "Tuxum yo‘nalishi"
+    """Meat poultry only (client decision 2026-11-05: the company works only with meat birds)."""
+
     BROILER = "BROILER", "Go‘sht yo‘nalishi"
     BREEDER = "BREEDER", "Naslli"
 
@@ -178,7 +179,7 @@ class DailyReport(models.Model):
     date = models.DateField("Sana")
     bird_count = models.PositiveIntegerField("Parranda soni")
     feed_kg = models.DecimalField("Yem (kg)", max_digits=10, decimal_places=2)
-    eggs = models.PositiveIntegerField("Tuxum (dona)")
+    # Main production output. Optional: a growing flock has days without meat output (null = not reported).
     meat_kg = models.DecimalField("Go‘sht (kg)", max_digits=10, decimal_places=2, null=True, blank=True)
     deaths = models.PositiveIntegerField("Nobud bo‘lgan", default=0)
     avg_weight_g = models.DecimalField(

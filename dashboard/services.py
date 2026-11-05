@@ -20,6 +20,7 @@ from farm.serializers import (
     MovementSerializer,
 )
 from logistics import selectors as logistics_selectors
+from stats.metrics import ratio, round_half_up
 from orders import selectors as order_selectors
 from vet import selectors as vet_selectors
 from warehouse.models import Product, ProductCategory, StockTransaction, StockTransactionType, Unit, returned_task_out
@@ -79,7 +80,6 @@ def admin_dashboard() -> dict[str, Any]:
     today_totals = reports_today.aggregate(
         feed=Coalesce(Sum("feed_kg"), _DEC_ZERO, output_field=DecimalField(max_digits=14, decimal_places=2)),
         meat=Coalesce(Sum("meat_kg"), _DEC_ZERO, output_field=DecimalField(max_digits=14, decimal_places=2)),
-        eggs=Coalesce(Sum("eggs"), _INT_ZERO, output_field=IntegerField()),
         active_reports=Count("id", filter=Q(household__is_active=True)),
     )
     birds_in_households = selectors.birds_in_households()
@@ -101,8 +101,7 @@ def admin_dashboard() -> dict[str, Any]:
         "deaths_30d_center": deaths_center,
         "feed_stock_kg": stock["feed_stock_kg"],
         "feed_used_today": float(today_totals["feed"]),
-        "eggs_today": today_totals["eggs"],
-        # TZ §4 "Kunlik tuxum yoki go‘sht ishlab chiqarish".
+        # TZ §4 daily production (meat only since 2026-11-05).
         "meat_today": float(today_totals["meat"]),
         # Same population as households_active, so "reports_today / households_active" and
         # households_active - reports_today (= households without a report) stay consistent.
@@ -138,14 +137,14 @@ def admin_dashboard() -> dict[str, Any]:
 
 
 def production(today: date, days: int, household: Household | None = None) -> list[dict[str, Any]]:
-    """Eggs and feed per day for ``days`` days ending today, oldest first, zero-filled."""
+    """Meat and feed per day for ``days`` days ending today, oldest first, zero-filled."""
     start = _window_start(today, days)
     qs = DailyReport.objects.filter(date__gte=start, date__lte=today)
     if household is not None:
         qs = qs.filter(household=household)
     totals = {
         row["date"]: row
-        for row in qs.values("date").annotate(eggs_sum=Sum("eggs"), feed_sum=Sum("feed_kg"), meat_sum=Sum("meat_kg"))
+        for row in qs.values("date").annotate(feed_sum=Sum("feed_kg"), meat_sum=Sum("meat_kg"))
     }
     result = []
     for offset in range(days):
@@ -154,9 +153,8 @@ def production(today: date, days: int, household: Household | None = None) -> li
         result.append(
             {
                 "date": day.isoformat(),
-                "eggs": int(row["eggs_sum"]) if row else 0,
-                "feed_kg": float(row["feed_sum"]) if row else 0.0,
                 "meat_kg": float(row["meat_sum"] or 0) if row else 0.0,
+                "feed_kg": float(row["feed_sum"]) if row else 0.0,
             }
         )
     return result
@@ -169,7 +167,7 @@ def _month_start(day: date, back: int) -> date:
 
 
 def monthly_production(today: date, months: int, household: Household | None = None) -> list[dict[str, Any]]:
-    """Eggs, meat and feed per calendar month (``months`` months up to the current one), zero-filled. One query."""
+    """Meat and feed per calendar month (``months`` months up to the current one), zero-filled. One query."""
     from django.db.models.functions import TruncMonth
 
     start = _month_start(today, months - 1)
@@ -181,7 +179,7 @@ def monthly_production(today: date, months: int, household: Household | None = N
         for row in qs.annotate(month=TruncMonth("date"))
         .order_by()
         .values("month")
-        .annotate(eggs_sum=Sum("eggs"), feed_sum=Sum("feed_kg"), meat_sum=Sum("meat_kg"), reports=Count("id"))
+        .annotate(feed_sum=Sum("feed_kg"), meat_sum=Sum("meat_kg"), reports=Count("id"))
     }
     result = []
     for back in range(months - 1, -1, -1):
@@ -190,7 +188,6 @@ def monthly_production(today: date, months: int, household: Household | None = N
         result.append(
             {
                 "month": month.strftime("%Y-%m"),
-                "eggs": int(row["eggs_sum"] or 0) if row else 0,
                 "meat_kg": float(row["meat_sum"] or 0) if row else 0.0,
                 "feed_kg": float(row["feed_sum"] or 0) if row else 0.0,
                 "reports": row["reports"] if row else 0,
@@ -229,6 +226,8 @@ def owner_dashboard(household: Household) -> dict[str, Any]:
     week = reports.filter(date__gte=last_7, date__lte=today)
     annotated = selectors.households_with_counts(Household.objects.select_related("owner")).get(pk=household.pk)
     today_report = reports.filter(date=today).first()
+    feed_7d = _dec_sum(week, "feed_kg")
+    meat_7d = _dec_sum(week, "meat_kg")
     received = list(
         with_lots(
             StockTransaction.objects.filter(household=household, type=StockTransactionType.OUT)
@@ -241,9 +240,10 @@ def owner_dashboard(household: Household) -> dict[str, Any]:
         "household": HouseholdSerializer(annotated).data,
         "bird_count": annotated.bird_count,
         "today_report": DailyReportSerializer(today_report).data if today_report else None,
-        "eggs_7d": _int_sum(week, "eggs"),
-        "feed_7d": _dec_sum(week, "feed_kg"),
-        "meat_7d": _dec_sum(week, "meat_kg"),
+        "feed_7d": feed_7d,
+        "meat_7d": meat_7d,
+        # Feed conversion ratio of the 7 days (API_CONTRACT_V2 §1.2 ``fcr``): kg of feed per kg of meat.
+        "fcr_7d": round_half_up(ratio(Decimal(str(feed_7d)), Decimal(str(meat_7d))), 2),
         "deaths_7d": _int_sum(
             PoultryMovement.objects.filter(household=household, type=MovementType.DEATH, date__gte=last_7, date__lte=today),
             "quantity",

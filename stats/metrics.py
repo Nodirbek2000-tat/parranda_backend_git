@@ -11,7 +11,7 @@ Conventions
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
@@ -66,15 +66,25 @@ def birds_avg(bird_days: int, days: int) -> Decimal | None:
     return ratio(bird_days, days)
 
 
-def laying_rate_pct(layer_eggs: int, layer_bird_days: int) -> Decimal | None:
-    """Hen-day laying rate ``100 × Σ_{R_L} eggs / Σ_{R_L} L_h(d)``."""
-    return percent(layer_eggs, layer_bird_days)
+def fcr(feed_cents: Number, meat_cents: Number) -> Decimal | None:
+    """Feed conversion ratio ``Σ feed_kg / Σ meat_kg`` over the same reports (lower is better; ``None`` when no meat)."""
+    return ratio(feed_cents, meat_cents)
 
 
-def feed_per_egg_g(layer_feed_cents: Number, layer_eggs: int) -> Decimal | None:
-    """``1000 × Σ_{R_L} feed × L/B / Σ_{R_L} eggs`` (grams of layer feed per egg)."""
-    value = ratio(layer_feed_cents, layer_eggs)
-    return None if value is None else value * 1000 / CENTS_PER_UNIT
+def meat_per_bird_kg(meat_cents: Number, bird_days: int, days: int) -> Decimal | None:
+    """Meat per average bird ``Σ meat_kg / birds_avg = Σ meat_kg × N / Σ_d B(d)`` (``None`` when ``birds_avg = 0``)."""
+    if not bird_days or not days:
+        return None
+    return to_decimal(meat_cents) * days / (Decimal(bird_days) * CENTS_PER_UNIT)
+
+
+def avg_weight_g(weight_bird_cents: Number, weighed_bird_days: int) -> Decimal | None:
+    """Bird-weighted mean live weight ``Σ (avg_weight_g × B_h(d)) / Σ B_h(d)`` over reports that state a weight.
+
+    Only reports with ``avg_weight_g`` and ``B_h(d) > 0`` take part; ``None`` when there is none.
+    """
+    value = ratio(weight_bird_cents, weighed_bird_days)
+    return None if value is None else value / CENTS_PER_UNIT
 
 
 def feed_per_bird_day_kg(feed_cents: int, bird_days: int) -> Decimal | None:
@@ -99,19 +109,6 @@ def mortality_fraction(deaths: int, bird_days: int, days: int) -> Fraction | Non
 
 def discipline_pct(reported: int, expected: int) -> Decimal | None:
     return percent(reported, expected)
-
-
-def layer_feed_share_cents(feed_cents: int, layer_birds: int, birds: int) -> Decimal:
-    """Feed allocated to layers on one report day: ``feed × L/B`` (``feed`` when the flock is all layers).
-
-    Only called with ``L > 0``. Legacy back-dated DEATH/OUT movements (Phase 1 validated them only against
-    the *current* count; the service now checks every later end-of-day count) can make another poultry type
-    negative on a past day, so ``B ≤ L`` (even ``B = 0``) is possible in old data; the share is then capped
-    at 1 (all feed to layers) instead of dividing by zero or allocating more feed than was reported.
-    """
-    if birds <= layer_birds:
-        return Decimal(feed_cents)
-    return Decimal(feed_cents) * layer_birds / Decimal(birds)
 
 
 # --- Deltas and KPI objects ------------------------------------------------------------------
@@ -157,21 +154,20 @@ def kpi(value: Number | None, previous: Number | None, *, places: int | None, un
 class Totals:
     """Exact aggregates of a set of households over a period (inputs of every §1.2 formula).
 
-    ``rl_*`` = report days with layer birds (``R_L``), ``rp_*`` = report days with birds (``R+``).
+    ``rp_*`` = report days with birds (``R+``); ``weight_bird_cents`` / ``weighed_bird_days`` = Σ of
+    ``avg_weight_g`` (hundredths) × ``B_h(d)`` and Σ ``B_h(d)`` over report days with a weight and birds.
     """
 
     bird_days: int = 0
     birds_end: int = 0
-    eggs: int = 0
+    meat_cents: int = 0
     feed_cents: int = 0
     deaths: int = 0
     distributed: int = 0
     returned: int = 0
     reports: int = 0
-    rl_eggs: int = 0
-    rl_layer_days: int = 0
-    rl_reports: int = 0
-    rl_feed_cents: Decimal = field(default_factory=lambda: ZERO)
+    weight_bird_cents: int = 0
+    weighed_bird_days: int = 0
     rp_feed_cents: int = 0
     rp_bird_days: int = 0
     expected: int = 0
@@ -194,14 +190,15 @@ class Totals:
 KPI_SPEC: dict[str, tuple[int | None, str]] = {
     "birds_end": (None, DELTA_RELATIVE),
     "birds_avg": (1, DELTA_RELATIVE),
-    "eggs": (None, DELTA_RELATIVE),
+    "meat_kg": (2, DELTA_RELATIVE),
     "feed_kg": (2, DELTA_RELATIVE),
     "deaths": (None, DELTA_RELATIVE),
     "distributed": (None, DELTA_RELATIVE),
     "returned": (None, DELTA_RELATIVE),
     "reports": (None, DELTA_RELATIVE),
-    "laying_rate_pct": (1, DELTA_POINTS),
-    "feed_per_egg_g": (1, DELTA_RELATIVE),
+    "fcr": (2, DELTA_RELATIVE),
+    "meat_per_bird_kg": (3, DELTA_RELATIVE),
+    "avg_weight_g": (1, DELTA_RELATIVE),
     "feed_per_bird_day_kg": (3, DELTA_RELATIVE),
     "mortality_pct": (1, DELTA_POINTS),
     "report_discipline_pct": (1, DELTA_POINTS),
@@ -213,14 +210,15 @@ def kpi_values(totals: Totals, days: int) -> dict[str, Number | None]:
     return {
         "birds_end": totals.birds_end,
         "birds_avg": birds_avg(totals.bird_days, days),
-        "eggs": totals.eggs,
+        "meat_kg": cents_to_units(totals.meat_cents),
         "feed_kg": cents_to_units(totals.feed_cents),
         "deaths": totals.deaths,
         "distributed": totals.distributed,
         "returned": totals.returned,
         "reports": totals.reports,
-        "laying_rate_pct": laying_rate_pct(totals.rl_eggs, totals.rl_layer_days),
-        "feed_per_egg_g": feed_per_egg_g(totals.rl_feed_cents, totals.rl_eggs),
+        "fcr": fcr(totals.feed_cents, totals.meat_cents),
+        "meat_per_bird_kg": meat_per_bird_kg(totals.meat_cents, totals.bird_days, days),
+        "avg_weight_g": avg_weight_g(totals.weight_bird_cents, totals.weighed_bird_days),
         "feed_per_bird_day_kg": feed_per_bird_day_kg(totals.rp_feed_cents, totals.rp_bird_days),
         "mortality_pct": mortality_pct(totals.deaths, totals.bird_days, days),
         "report_discipline_pct": discipline_pct(totals.reported_expected, totals.expected),
@@ -228,7 +226,7 @@ def kpi_values(totals: Totals, days: int) -> dict[str, Number | None]:
 
 
 def kpis(current: Totals, previous: Totals, days: int) -> dict[str, dict[str, Any]]:
-    """The 13 KPI objects ``{value, previous, delta, delta_unit}`` (both periods have ``days`` days)."""
+    """The 14 KPI objects ``{value, previous, delta, delta_unit}`` (both periods have ``days`` days)."""
     now = kpi_values(current, days)
     before = kpi_values(previous, days)
     return {key: kpi(now[key], before[key], places=places, unit=unit) for key, (places, unit) in KPI_SPEC.items()}

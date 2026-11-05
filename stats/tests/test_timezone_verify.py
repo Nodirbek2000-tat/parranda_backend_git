@@ -41,8 +41,8 @@ class LocalDayBoundaryTests(FrozenClockTestCase):
         self.assertEqual(
             sorted(PoultryMovement.objects.values_list("date", flat=True)), [date(2026, 11, 2), date(2026, 11, 3)]
         )
-        self.post_at(late, "/api/daily-reports", {"household": self.household.pk, "eggs": 50, "feed_kg": "10.00"})
-        self.post_at(early, "/api/daily-reports", {"household": self.household.pk, "eggs": 60, "feed_kg": "11.00"})
+        self.post_at(late, "/api/daily-reports", {"household": self.household.pk, "meat_kg": "5.00", "feed_kg": "10.00"})
+        self.post_at(early, "/api/daily-reports", {"household": self.household.pk, "meat_kg": "6.00", "feed_kg": "11.00"})
         self.assertEqual(
             sorted(DailyReport.objects.values_list("date", flat=True)), [date(2026, 11, 2), date(2026, 11, 3)]
         )
@@ -57,7 +57,7 @@ class LocalDayBoundaryTests(FrozenClockTestCase):
             f"/api/households/{self.household.pk}/stats?date_from=2026-11-02&date_to=2026-11-03"
         ).json()
         self.assertEqual([r["birds"] for r in data["series"]], [100, 97])
-        self.assertEqual([r["eggs"] for r in data["series"]], [50, 60])
+        self.assertEqual([r["meat_kg"] for r in data["series"]], [5.0, 6.0])
         self.assertEqual([r["deaths"] for r in data["series"]], [0, 3])
 
         product = self.client.get(f"/api/products/{self.product.pk}/stats?date_from=2026-11-02&date_to=2026-11-03").json()

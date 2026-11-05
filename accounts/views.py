@@ -200,7 +200,8 @@ class UserViewSet(
     lookup_value_regex = ID_REGEX
 
     def get_queryset(self) -> QuerySet[User]:
-        qs = user_queryset().order_by("id")
+        # Deleted accounts (services.delete_user) are gone for the API: 404 on detail, absent from lists.
+        qs = user_queryset().filter(deleted_at__isnull=True).order_by("id")
         if not self.request.user.is_superuser:
             qs = qs.exclude(is_superuser=True)
         if self.action != "list":
@@ -249,6 +250,16 @@ class UserViewSet(
         serializer.is_valid(raise_exception=True)
         services.update_user(user, dict(serializer.validated_data), actor=request.user)
         return Response(UserSerializer(user).data)
+
+    @extend_schema(request=None, responses={204: None, 400: ERROR_400})
+    def destroy(self, request: Request, pk: str | None = None) -> Response:
+        """Delete a staff account (kept as history, hidden and blocked; see services.delete_user)."""
+        target = self.get_object()
+        try:
+            services.delete_user(target, actor=request.user)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from None
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request: Request, pk: str | None = None) -> Response:

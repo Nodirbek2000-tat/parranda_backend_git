@@ -29,7 +29,7 @@ class CheckIntegrityTests(BaseAPITestCase):
                 document_no="D-1",
             )
         cls.report = farm_services.create_daily_report(
-            actor=cls.owner_a, household=None, feed_kg=Decimal("10"), eggs=100, deaths=2
+            actor=cls.owner_a, household=None, feed_kg=Decimal("10"), meat_kg=Decimal("5"), deaths=2
         )
         farm_services.record_movement(
             actor=cls.admin, batch=cls.batch, household=None, movement_type=MovementType.OUT, quantity=5

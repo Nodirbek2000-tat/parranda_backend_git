@@ -9,11 +9,11 @@ from django.db.models import F
 from django.test import override_settings
 
 from common.testing import BOT_API_TOKEN
-from farm.models import MovementType, PoultryBatch, PoultryMovement, PoultryType
+from farm.models import MovementType, PoultryBatch, PoultryMovement
 from warehouse.models import Product
 
 from .helpers import TODAY, FrozenClockTestCase
-from .test_oracle import Oracle, build_fixture, days_of, pct, rhu
+from .test_oracle import Oracle, build_fixture, days_of, div, pct, rhu
 
 
 def batch_oracle(b, date_from, date_to):
@@ -160,10 +160,10 @@ class BatchSummaryOracleMixin:
                 self.assertEqual(data["bird_count"], oracle.B(h.pk, TODAY))
                 self.assertEqual(data["today"], {
                     "report_submitted": rep is not None,
-                    "eggs": rep[0] if rep else None,
                     "feed_kg": rhu(rep[1], 2) if rep else None,
                     "meat_kg": rhu(oracle.meat_by[(h.pk, TODAY)], 2) if rep and (h.pk, TODAY) in oracle.meat_by
                     else None,
+                    "avg_weight_g": rhu(rep[2], 1) if rep else None,
                     "deaths": oracle.flows([h.pk], [TODAY], MovementType.DEATH),
                 })
                 self.assertEqual(data["last_7d"]["meat_kg"],
@@ -172,17 +172,17 @@ class BatchSummaryOracleMixin:
                 self.assertEqual(last["reports"], v["reports"])
                 self.assertEqual(last["expected"], v["_expected"])
                 self.assertEqual(last["reported"], v["_reported_expected"])
-                self.assertEqual(last["eggs"], v["eggs"])
                 self.assertEqual(last["feed_kg"], rhu(v["feed_kg"], 2))
+                self.assertEqual(last["meat_kg"], rhu(v["meat_kg"], 2))
                 self.assertEqual(last["deaths"], v["deaths"])
-                self.assertEqual(last["laying_rate_pct"], rhu(v["laying_rate_pct"], 1))
+                self.assertEqual(last["fcr"], rhu(v["fcr"], 2))
+                self.assertEqual(last["avg_weight_g"], rhu(v["avg_weight_g"], 1))
         self.admin.telegram_id = 777000 + self.SEED
         self.admin.save(update_fields=["telegram_id"])
         data = self.get(f"/api/bot/users/{self.admin.telegram_id}/summary", HTTP_X_BOT_TOKEN=BOT_API_TOKEN)["today"]
         H = sorted(oracle.households)
         active = [h for h in H if oracle.households[h].is_active]
         reps = [(h, oracle.reports[(h, TODAY)]) for h in H if (h, TODAY) in oracle.reports]
-        lay = [(h, e) for h, (e, _f) in reps if oracle.B(h, TODAY, PoultryType.LAYER) > 0]
         due = [h for h in active if oracle.expected(h, TODAY)]
         reported_due = sum(1 for h, _ in reps if h in due)
         in_house = sum(oracle.B(h, TODAY) for h in H)
@@ -192,12 +192,10 @@ class BatchSummaryOracleMixin:
             "households_expected": len(due),
             "households_reported": reported_due,
             "report_discipline_pct": rhu(pct(reported_due, len(due)), 1),
-            "eggs": sum(e for _, (e, _f) in reps),
-            "feed_kg": rhu(sum((f for _, (_e, f) in reps), Fraction(0)), 2),
+            "feed_kg": rhu(sum((f for _, (_m, f, _w) in reps), Fraction(0)), 2),
             "meat_kg": rhu(oracle.meat.get(TODAY, Fraction(0)), 2),
-            "laying_rate_pct": rhu(
-                pct(sum(e for _, e in lay), sum(oracle.B(h, TODAY, PoultryType.LAYER) for h, _ in lay)), 1
-            ),
+            "fcr": rhu(div(sum((f for _, (_m, f, _w) in reps), Fraction(0)),
+                           sum((m for _, (m, _f, _w) in reps), Fraction(0))), 2),
             "deaths": sum(q for h, _t, k, q, d, _b in oracle.moves if k == "DEATH" and d == TODAY and h is not None),
             "deaths_center": sum(q for h, _t, k, q, d, _b in oracle.moves if k == "DEATH" and d == TODAY and h is None),
             "birds_in_households": in_house,

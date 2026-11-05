@@ -44,38 +44,38 @@ class HouseholdSpec:
     mfy: str
     lat: str
     lon: str
-    layers: int  # layer birds distributed
-    broilers: int  # broiler birds distributed
-    laying: float  # typical hen-day laying rate
+    main: int  # broilers distributed from the main batches (A / B)
+    extra: int  # broilers of a second, later batch (C / D)
+    fcr: float  # typical feed conversion ratio (kg of feed per kg of meat)
     miss_rate: float  # share of days without a report
     death_rate: float  # daily probability of a death
 
 
 HOUSEHOLDS = [
     HouseholdSpec("demo_egasi1", "Bobur", "Aliyev", "Navbahor 12-uy", "Navobod tumani", "Navbahor MFY",
-                  "39.654120", "66.958830", 600, 200, 0.86, 0.02, 0.10),
+                  "39.654120", "66.958830", 600, 200, 1.62, 0.02, 0.10),
     HouseholdSpec("demo_egasi2", "Dilnoza", "Karimova", "Bog‘ishamol 5-uy", "Navobod tumani", "Bog‘ishamol MFY",
-                  "39.631240", "66.926410", 500, 0, 0.82, 0.05, 0.08),
+                  "39.631240", "66.926410", 500, 0, 1.71, 0.05, 0.08),
     HouseholdSpec("demo_egasi3", "Sherzod", "Rahimov", "Yangiobod 27-uy", "Navobod tumani", "Yangiobod MFY",
-                  "39.682510", "66.981730", 0, 700, 0.0, 0.04, 0.15),
+                  "39.682510", "66.981730", 0, 700, 1.78, 0.04, 0.15),
     HouseholdSpec("demo_egasi4", "Malika", "Yusupova", "Gulobod 3-uy", "Navobod tumani", "Gulobod MFY",
-                  "39.661870", "66.944020", 450, 0, 0.78, 0.10, 0.07),
+                  "39.661870", "66.944020", 450, 0, 1.80, 0.10, 0.07),
     HouseholdSpec("demo_egasi5", "Otabek", "Saidov", "Chinor 41-uy", "Navobod tumani", "Chinor MFY",
-                  "39.645330", "66.990150", 400, 150, 0.74, 0.06, 0.10),
+                  "39.645330", "66.990150", 400, 150, 1.86, 0.06, 0.10),
     HouseholdSpec("demo_egasi6", "Nodira", "Ergasheva", "Mehnat 8-uy", "Navobod tumani", "Mehnat MFY",
-                  "39.672040", "66.920560", 350, 0, 0.58, 0.20, 0.30),
+                  "39.672040", "66.920560", 350, 0, 2.45, 0.20, 0.30),
     HouseholdSpec("demo_egasi7", "Jamshid", "Qodirov", "Urgut markaz 15-uy", "Urgut tumani", "Markaz MFY",
-                  "39.402310", "67.243870", 550, 0, 0.88, 0.03, 0.06),
+                  "39.402310", "67.243870", 550, 0, 1.58, 0.03, 0.06),
     HouseholdSpec("demo_egasi8", "Feruza", "Tosheva", "Kamangaron 9-uy", "Urgut tumani", "Kamangaron MFY",
-                  "39.441120", "67.204550", 0, 600, 0.0, 0.08, 0.12),
+                  "39.441120", "67.204550", 0, 600, 1.83, 0.08, 0.12),
     HouseholdSpec("demo_egasi9", "Ulug‘bek", "Nazarov", "Qoratepa 22-uy", "Urgut tumani", "Qoratepa MFY",
-                  "39.420870", "67.281400", 300, 200, 0.80, 0.07, 0.09),
+                  "39.420870", "67.281400", 300, 200, 1.74, 0.07, 0.09),
     HouseholdSpec("demo_egasi10", "Gulnora", "Hamidova", "Juma 4-uy", "Pastdarg‘om tumani", "Juma MFY",
-                  "39.711030", "66.661220", 500, 0, 0.84, 0.04, 0.08),
+                  "39.711030", "66.661220", 500, 0, 1.66, 0.04, 0.08),
     HouseholdSpec("demo_egasi11", "Akmal", "Murodov", "Chordara 30-uy", "Pastdarg‘om tumani", "Chordara MFY",
-                  "39.735540", "66.703910", 250, 300, 0.76, 0.09, 0.10),
+                  "39.735540", "66.703910", 250, 300, 1.90, 0.09, 0.10),
     HouseholdSpec("demo_egasi12", "Sevara", "Islomova", "Payariq yo‘li 2-uy", "Pastdarg‘om tumani", "Do‘stlik MFY",
-                  "39.689940", "66.735680", 400, 0, 0.80, 0.05, 0.08),
+                  "39.689940", "66.735680", 400, 0, 1.75, 0.05, 0.08),
 ]
 #: This household stops working 12 days before today (``is_active = False``).
 INACTIVE_USERNAME = "demo_egasi12"
@@ -320,7 +320,7 @@ class Command(BaseCommand):
     def _batch(self, kind: str, breed: str, quantity: int, days_ago: int, supplier: str, weight: str) -> PoultryBatch:
         batch = farm_services.create_batch(
             actor=self.admin if kind != PoultryType.BROILER else self.warehouse,
-            poultry_type=kind, breed=breed, initial_quantity=quantity, age_days=1 if kind != PoultryType.LAYER else 120,
+            poultry_type=kind, breed=breed, initial_quantity=quantity, age_days=1 if kind == PoultryType.BROILER else 21,
             supplier=supplier, arrived_at=self.today - timedelta(days=days_ago), initial_weight_g=Decimal(weight),
         )
         PoultryBatch.objects.filter(pk=batch.pk).update(created_at=local_dt(batch.arrived_at, 9))
@@ -328,14 +328,13 @@ class Command(BaseCommand):
 
     def _seed_batches(self) -> dict[str, PoultryBatch]:
         return {
-            "layer_a": self._batch(PoultryType.LAYER, "Lohmann Brown", 4200, HISTORY_DAYS + 2,
-                                   "Toshkent parranda inkubatori (demo)", "1450"),
-            "layer_b": self._batch(PoultryType.LAYER, "Hy-Line W-36", 1500, 41, "Andijon naslchilik markazi (demo)",
-                                   "1380"),
+            "main_a": self._batch(PoultryType.BROILER, "Ross 308", 4200, HISTORY_DAYS + 2,
+                                  "Toshkent parranda inkubatori (demo)", "42"),
+            "main_b": self._batch(PoultryType.BROILER, "Cobb 500", 1500, 41, "Andijon broyler markazi (demo)", "41"),
             "broiler_a": self._batch(PoultryType.BROILER, "Ross 308", 2600, 55, "Samarqand broyler markazi (demo)", "42"),
             "broiler_b": self._batch(PoultryType.BROILER, "Cobb 500", 1200, 21, "Samarqand broyler markazi (demo)", "41"),
-            "breeder": self._batch(PoultryType.BREEDER, "Lohmann Brown PS", 400, 48, "Toshkent parranda inkubatori (demo)",
-                                   "40"),
+            "breeder": self._batch(PoultryType.BREEDER, "Ross 308 PS", 400, 48, "Toshkent parranda inkubatori (demo)",
+                                   "380"),
         }
 
     def _move(self, batch: PoultryBatch, household: Household | None, kind: str, quantity: int, day: date,
@@ -348,30 +347,33 @@ class Command(BaseCommand):
 
     def _seed_flock(self, households: list[tuple[HouseholdSpec, Household]], batches: dict[str, PoultryBatch]) -> None:
         rng = self.rng
-        layer_a, layer_b = batches["layer_a"], batches["layer_b"]
+        main_a, main_b = batches["main_a"], batches["main_b"]
         broiler_a, broiler_b = batches["broiler_a"], batches["broiler_b"]
-        self._move(layer_a, None, MovementType.DEATH, 18, layer_a.arrived_at + timedelta(days=1), "Tashishdan keyin")
+        self._move(main_a, None, MovementType.DEATH, 18, main_a.arrived_at + timedelta(days=1), "Tashishdan keyin")
         self._move(broiler_a, None, MovementType.DEATH, 11, broiler_a.arrived_at + timedelta(days=2))
         self._move(batches["breeder"], None, MovementType.OUT, 40, batches["breeder"].arrived_at + timedelta(days=10),
                    "Naslchilik xo‘jaligiga sotildi")
 
-        # Who gets what and when (layers from the old batch first, the later ones from batch B).
+        # Who gets what and when (the old main batch first, the later households from batch B).
         start_day: dict[int, date] = {}
         for index, (spec, household) in enumerate(households):
             first_day = self.start + timedelta(days=index % 5)
-            if spec.layers:
-                source = layer_a if index < 8 else layer_b
+            if spec.main:
+                source = main_a if index < 8 else main_b
                 day = max(first_day, source.arrived_at + timedelta(days=1))
-                self._move(source, household, MovementType.DISTRIBUTE, spec.layers, day)
+                self._move(source, household, MovementType.DISTRIBUTE, spec.main, day)
                 first_day = day
-            if spec.broilers:
+            if spec.extra:
                 source = broiler_a if index % 2 == 0 else broiler_b
                 day = max(first_day, source.arrived_at + timedelta(days=2))
-                self._move(source, household, MovementType.DISTRIBUTE, spec.broilers, day)
-                first_day = min(first_day, day) if spec.layers else day
+                self._move(source, household, MovementType.DISTRIBUTE, spec.extra, day)
+                first_day = min(first_day, day) if spec.main else day
             start_day[household.pk] = first_day
+        # Parent stock (BREEDER) for one household, so both poultry types appear in the statistics.
+        breeder_day = max(start_day[households[1][1].pk], batches["breeder"].arrived_at + timedelta(days=12))
+        self._move(batches["breeder"], households[1][1], MovementType.DISTRIBUTE, 120, breeder_day)
         # A few corrections: returns and a sale of grown broilers.
-        self._move(layer_a, households[3][1], MovementType.RETURN, 30, self.today - timedelta(days=35), "Ortiqcha")
+        self._move(main_a, households[3][1], MovementType.RETURN, 30, self.today - timedelta(days=35), "Ortiqcha")
         self._move(broiler_a, households[2][1], MovementType.OUT, 250, self.today - timedelta(days=6),
                    "Bozorga sotildi")
         self._move(broiler_a, households[0][1], MovementType.OUT, 120, self.today - timedelta(days=4),
@@ -391,23 +393,26 @@ class Command(BaseCommand):
     def _report(self, spec: HouseholdSpec, household: Household, day: date) -> None:
         rng = self.rng
         rows = selectors.household_batches(household.pk)
-        layers = sum(row["count"] for row in rows if row["poultry_type"] == PoultryType.LAYER)
         broilers = sum(row["count"] for row in rows if row["poultry_type"] == PoultryType.BROILER)
-        birds = layers + broilers
+        breeders = sum(row["count"] for row in rows if row["poultry_type"] == PoultryType.BREEDER)
+        birds = broilers + breeders
         if birds <= 0:
             return
         deaths = 0
         if rng.random() < spec.death_rate:
             deaths = min(birds, rng.choice((1, 1, 1, 2, 2, 3)) + (3 if spec.death_rate > 0.2 else 0))
-        eggs = int(layers * max(0.0, rng.gauss(spec.laying, 0.035))) if layers else 0
-        feed = layers * rng.uniform(0.108, 0.122) + broilers * rng.uniform(0.145, 0.175)
+        feed = broilers * rng.uniform(0.145, 0.175) + breeders * rng.uniform(0.150, 0.165)
+        # Meat output (kg) follows the household's feed conversion; ~1 day in 10 has no meat figure.
+        meat = None
+        if rng.random() >= 0.1:
+            meat = Decimal(feed / max(1.3, rng.gauss(spec.fcr, 0.08))).quantize(Decimal("0.1"))
         weight = None
-        if broilers and not layers:
+        if rng.random() < 0.7:  # the flock is weighed on most days
             weight = Decimal(min(2900, 400 + (day - self.start).days * 42 + rng.randint(-25, 25)))
         report = farm_services.create_daily_report(
             actor=household.owner, household=household, on_date=day,
-            feed_kg=Decimal(feed).quantize(Decimal("0.1")), eggs=eggs, deaths=deaths,
-            meat_kg=None, avg_weight_g=weight, note="",
+            feed_kg=Decimal(feed).quantize(Decimal("0.1")), deaths=deaths,
+            meat_kg=meat, avg_weight_g=weight, note="",
         )
         when = local_dt(day, 19, rng.randint(0, 59))
         DailyReport.objects.filter(pk=report.pk).update(created_at=when)
@@ -423,7 +428,7 @@ class Command(BaseCommand):
             return item
 
         starter = product("Yem PK-1 (start)", ProductCategory.FEED, Unit.KG, "800")
-        layer_feed = product("Yem PK-5 (tuxum)", ProductCategory.FEED, Unit.KG, "1500")
+        grower_feed = product("Yem PK-5 (o‘sish)", ProductCategory.FEED, Unit.KG, "1500")
         broiler_feed = product("Yem PK-6 (broyler)", ProductCategory.FEED, Unit.KG, "1000")
         sacks = product("Premiks (qop)", ProductCategory.FEED, Unit.SACK, "10")
         vaccine = product("Nyukasl vaksinasi (La Sota)", ProductCategory.VACCINE, Unit.PIECE, "500")
@@ -441,7 +446,7 @@ class Command(BaseCommand):
 
         for offset in range(0, HISTORY_DAYS + 1, 10):  # deliveries every 10 days
             day = self.start + timedelta(days=offset)
-            add(day, 8, layer_feed, "IN", rng.choice((4500, 5000, 5500)))
+            add(day, 8, grower_feed, "IN", rng.choice((4500, 5000, 5500)))
             add(day, 8, broiler_feed, "IN", rng.choice((2000, 2500, 3000)))
             if offset % 20 == 0:
                 add(day, 8, starter, "IN", 3000)
@@ -451,7 +456,7 @@ class Command(BaseCommand):
         for offset in range(2, HISTORY_DAYS + 1, 7):  # weekly hand-outs to the households
             day = self.start + timedelta(days=offset)
             for index, household in enumerate(households[:-1] if offset > HISTORY_DAYS - 12 else households):
-                add(day, 14, layer_feed if index % 3 != 2 else broiler_feed, "OUT", rng.randint(35, 70) * 10, household)
+                add(day, 14, grower_feed if index % 3 != 2 else broiler_feed, "OUT", rng.randint(35, 70) * 10, household)
                 if index % 4 == 0:
                     add(day, 15, sacks, "OUT", 1, household)
             add(day, 16, starter, "OUT", rng.randint(20, 40) * 10)

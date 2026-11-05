@@ -314,7 +314,6 @@ class DailyReportViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             batch=data["batch"],
             on_date=data["date"],
             feed_kg=data["feed_kg"],
-            eggs=data["eggs"],
             deaths=data["deaths"],
             meat_kg=data["meat_kg"],
             avg_weight_g=data["avg_weight_g"],

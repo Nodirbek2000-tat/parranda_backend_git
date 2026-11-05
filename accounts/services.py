@@ -244,6 +244,55 @@ def end_sessions(target: User, *, actor: User, unlink_telegram: bool = False) ->
         )
 
 
+MSG_DELETE_SELF = "O‘z hisobingizni o‘chira olmaysiz."
+MSG_DELETE_OWNER = "Xonadon egasining hisobi xonadon bilan bog‘langan: uni o‘chirib bo‘lmaydi, xonadonni nofaol qiling."
+MSG_DELETE_LAST_SUPER = "Oxirgi Superadmin hisobini o‘chirib bo‘lmaydi."
+DELETED_USERNAME_PREFIX = "deleted-"
+
+
+def delete_user(target: User, *, actor: User) -> None:
+    """Delete a staff account (ADMIN / WAREHOUSE / LOGISTICS / VET).
+
+    The row is kept so that history (stock operations, orders, tasks, audit) stays intact, but
+    the account disappears: it is blocked, every session and the Telegram link end, it is hidden
+    from all user lists and its login is renamed so the name can be given to someone else.
+    """
+    if target.pk == actor.pk:
+        raise ValueError(MSG_DELETE_SELF)
+    with transaction.atomic():
+        target = User.objects.select_for_update().get(pk=target.pk)
+        if target.deleted_at is not None:
+            return
+        if target.effective_role == "OWNER":
+            raise ValueError(MSG_DELETE_OWNER)
+        if target.is_superuser and not User.objects.filter(
+            is_superuser=True, is_active=True, deleted_at__isnull=True
+        ).exclude(pk=target.pk).exists():
+            raise ValueError(MSG_DELETE_LAST_SUPER)
+        before = audit.snapshot(target)
+        old_telegram = target.telegram_id
+        now = timezone.now()
+        target.deleted_at = now
+        target.is_active = False
+        target.telegram_id = None
+        target.sessions_revoked_at = now
+        tokens.bump_token_version(target)
+        target.username = f"{DELETED_USERNAME_PREFIX}{target.pk}-{target.username}"[:150]
+        target.save(update_fields=[
+            "deleted_at", "is_active", "telegram_id", "sessions_revoked_at", "token_version", "username",
+        ])
+        if old_telegram is not None:
+            _record_unlink(target, old_telegram, actor, reason="Hisob o‘chirildi")
+        audit.record(
+            module=AuditModule.USERS,
+            action=AuditAction.DELETE,
+            obj=target,
+            actor=actor,
+            before=before,
+            after={"deleted": True, "is_active": False},
+        )
+
+
 def _record_unlink(user: User, old_telegram_id: int, actor: User | None, reason: str = "") -> None:
     after: dict = {"telegram_id": None}
     if reason:

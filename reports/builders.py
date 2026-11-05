@@ -52,6 +52,15 @@ def _cents(value: Decimal | None) -> int:
     return int((value or Decimal(0)) * 100)
 
 
+def _report_row(household_id: int, index: int, meat, feed, weight) -> tuple[int, int, int, int, int]:
+    """One :func:`stats.queries.report_rows` tuple built from already fetched report values."""
+    return (household_id, index, _cents(meat), _cents(feed), queries.NO_WEIGHT if weight is None else _cents(weight))
+
+
+def _avg_weight(totals: Totals) -> Decimal | None:
+    return metrics.avg_weight_g(totals.weight_bird_cents, totals.weighed_bird_days)
+
+
 def _households(p: ReportParams):
     """Households of the region / district / household filters (OWNER: forced to the own household)."""
     qs = Household.objects.all()
@@ -97,7 +106,7 @@ class Scope:
         return ScopeStats(self.window, self.metas, report_rows, current=(first, last), today=self.p.today)
 
     def birds(self, state: HouseholdState, totals: Totals) -> Totals:
-        """Bird / death numbers restricted to the poultry type filter (eggs and feed stay per household)."""
+        """Bird / death numbers restricted to the poultry type filter (meat and feed stay per household)."""
         if not self.p.poultry_type:
             return totals
         return state.type_totals.get(self.p.poultry_type) or Totals()
@@ -117,24 +126,24 @@ def daily_production(p: ReportParams) -> ReportData:
         reports_qs = reports_qs.filter(household__in=_households(p).values("pk"))
     full = list(
         reports_qs.order_by("date", "household_id").values_list(
-            "household_id", "date", "eggs", "feed_kg", "meat_kg", "deaths", "avg_weight_g", "note"
+            "household_id", "date", "feed_kg", "meat_kg", "deaths", "avg_weight_g", "note"
         )
     )
-    tuples = [(hid, (day - period.date_from).days, eggs, _cents(feed)) for hid, day, eggs, feed, *_ in full]
+    tuples = [
+        _report_row(hid, (day - period.date_from).days, meat, feed, weight)
+        for hid, day, feed, meat, _deaths, weight, _note in full
+    ]
     scope = Scope(p, report_rows=tuples)
     states = scope.stats.states
     rows: list[dict[str, Any]] = []
-    meat_cents = 0
     deaths = 0
-    for hid, day, eggs, feed, meat, report_deaths, avg_weight, note in full:
+    for hid, day, feed, meat, report_deaths, avg_weight, note in full:
         state = states.get(hid)
         if state is None:
             continue
         index = (day - scope.window.start).days
         step = state.by_type.get(p.poultry_type) if p.poultry_type else state.all
         birds = step.at(index) if step is not None else 0
-        layers = state.layer.at(index) if state.layer is not None else 0
-        meat_cents += _cents(meat)
         deaths += report_deaths
         rows.append(
             {
@@ -143,31 +152,30 @@ def daily_production(p: ReportParams) -> ReportData:
                 "household": state.meta.name,
                 "district": state.meta.district,
                 "birds": birds,
-                "eggs": eggs,
-                "laying_rate_pct": metrics.laying_rate_pct(eggs, layers) if layers > 0 else None,
                 "feed_kg": feed,
                 "meat_kg": meat,
-                "deaths": report_deaths,
+                "fcr": metrics.fcr(_cents(feed), _cents(meat)),
                 "avg_weight_g": avg_weight,
+                "deaths": report_deaths,
                 "note": note,
             }
         )
     totals_src = scope.stats.total_current()
     values = metrics.kpi_values(totals_src, period.days)
     totals = {
-        "eggs": totals_src.eggs,
-        "laying_rate_pct": values["laying_rate_pct"],
         "feed_kg": _kg(totals_src.feed_cents),
-        "meat_kg": _kg(meat_cents),
+        "meat_kg": _kg(totals_src.meat_cents),
+        "fcr": values["fcr"],
+        "avg_weight_g": values["avg_weight_g"],
         "deaths": deaths,
     }
     households = len({row["household_code"] for row in rows})
     summary = [
         ("Xonadonlar", str(households)),
         ("Hisobotlar", str(len(rows))),
-        ("Tuxum", _num(totals_src.eggs)),
-        ("Tuxumdorlik", _percent(values["laying_rate_pct"])),
-        ("Yem, kg", _dec(_kg(totals_src.feed_cents))),
+        ("Go‘sht, kg", _dec(totals["meat_kg"])),
+        ("FCR (yem/go‘sht)", _dec(values["fcr"])),
+        ("Yem, kg", _dec(totals["feed_kg"])),
         ("Hisobot intizomi", _percent(values["report_discipline_pct"])),
     ]
     columns = [
@@ -176,12 +184,11 @@ def daily_production(p: ReportParams) -> ReportData:
         col("household", "Xonadon"),
         col("district", "Tuman"),
         col("birds", "Parranda", INT),
-        col("eggs", "Tuxum", INT),
-        col("laying_rate_pct", "Tuxumdorlik %", PERCENT, 1),
         col("feed_kg", "Yem kg", DECIMAL, 2),
         col("meat_kg", "Go‘sht kg", DECIMAL, 2),
-        col("deaths", "Nobud", INT),
+        col("fcr", "FCR", DECIMAL, 2),
         col("avg_weight_g", "O‘rtacha vazn g", DECIMAL, 1),
+        col("deaths", "Nobud", INT),
         col("note", "Izoh"),
     ]
     return ReportData(columns, rows, totals, summary)
@@ -205,19 +212,19 @@ def monthly_production(p: ReportParams) -> ReportData:
     reports_qs = DailyReport.objects.filter(date__gte=period.date_from, date__lte=period.date_to)
     if _filtered(p):
         reports_qs = reports_qs.filter(household__in=_households(p).values("pk"))
-    full = list(reports_qs.order_by().values_list("household_id", "date", "eggs", "feed_kg", "meat_kg"))
-    tuples = [(hid, (day - period.date_from).days, eggs, _cents(feed)) for hid, day, eggs, feed, _meat in full]
+    full = list(reports_qs.order_by().values_list("household_id", "date", "feed_kg", "meat_kg", "avg_weight_g"))
+    tuples = [
+        _report_row(hid, (day - period.date_from).days, meat, feed, weight) for hid, day, feed, meat, weight in full
+    ]
     scope = Scope(p, report_rows=tuples)
     member = set(scope.stats.states)
     by_month: dict[tuple[int, int], list] = defaultdict(list)
-    meat: dict[tuple[int, int], int] = defaultdict(int)
     reporters: dict[tuple[int, int], set[int]] = defaultdict(set)
-    for (hid, day, _eggs, _feed, meat_kg), item in zip(full, tuples):
+    for (hid, day, *_values), item in zip(full, tuples):
         if hid not in member:
             continue
         key = (day.year, day.month)
         by_month[key].append(item)
-        meat[key] += _cents(meat_kg)
         reporters[key].add(hid)
     rows = []
     for start, end in _months(period):
@@ -232,11 +239,11 @@ def monthly_production(p: ReportParams) -> ReportData:
                 "month": f"{start.month:02d}.{start.year}",
                 "households_reported": len(reporters.get(key, ())),
                 "reports": totals.reports,
-                "eggs": totals.eggs,
-                "laying_rate_pct": metrics.laying_rate_pct(totals.rl_eggs, totals.rl_layer_days),
+                "meat_kg": _kg(totals.meat_cents),
                 "feed_kg": _kg(totals.feed_cents),
-                "feed_per_egg_g": metrics.feed_per_egg_g(totals.rl_feed_cents, totals.rl_eggs),
-                "meat_kg": _kg(meat.get(key, 0)),
+                "fcr": metrics.fcr(totals.feed_cents, totals.meat_cents),
+                "meat_per_bird_kg": metrics.meat_per_bird_kg(totals.meat_cents, bird_days, days),
+                "avg_weight_g": _avg_weight(totals),
                 "deaths": deaths,
                 "mortality_pct": metrics.mortality_pct(deaths, bird_days, days),
             }
@@ -246,29 +253,30 @@ def monthly_production(p: ReportParams) -> ReportData:
     totals = {
         "households_reported": len(set().union(*reporters.values())) if reporters else 0,
         "reports": all_totals.reports,
-        "eggs": all_totals.eggs,
-        "laying_rate_pct": metrics.laying_rate_pct(all_totals.rl_eggs, all_totals.rl_layer_days),
+        "meat_kg": _kg(all_totals.meat_cents),
         "feed_kg": _kg(all_totals.feed_cents),
-        "feed_per_egg_g": metrics.feed_per_egg_g(all_totals.rl_feed_cents, all_totals.rl_eggs),
-        "meat_kg": _kg(sum(meat.values())),
+        "fcr": metrics.fcr(all_totals.feed_cents, all_totals.meat_cents),
+        "meat_per_bird_kg": metrics.meat_per_bird_kg(all_totals.meat_cents, bird_days, period.days),
+        "avg_weight_g": _avg_weight(all_totals),
         "deaths": deaths,
         "mortality_pct": metrics.mortality_pct(deaths, bird_days, period.days),
     }
     summary = [
         ("Oylar", str(len(rows))),
         ("Xonadonlar", str(len(scope.metas))),
-        ("Tuxum", _num(all_totals.eggs)),
+        ("Go‘sht, kg", _dec(totals["meat_kg"])),
+        ("FCR (yem/go‘sht)", _dec(totals["fcr"])),
         ("Nobud", _num(deaths)),
     ]
     columns = [
         col("month", "Oy"),
         col("households_reported", "Hisobot bergan xonadonlar", INT),
         col("reports", "Hisobotlar", INT),
-        col("eggs", "Tuxum", INT),
-        col("laying_rate_pct", "Tuxumdorlik %", PERCENT, 1),
-        col("feed_kg", "Yem kg", DECIMAL, 2),
-        col("feed_per_egg_g", "Yem/tuxum g", DECIMAL, 1),
         col("meat_kg", "Go‘sht kg", DECIMAL, 2),
+        col("feed_kg", "Yem kg", DECIMAL, 2),
+        col("fcr", "FCR", DECIMAL, 2),
+        col("meat_per_bird_kg", "Go‘sht/parranda kg", DECIMAL, 3),
+        col("avg_weight_g", "O‘rtacha vazn g", DECIMAL, 1),
         col("deaths", "Nobud", INT),
         col("mortality_pct", "O‘lim %", PERCENT, 1),
     ]
@@ -564,7 +572,8 @@ def feed_consumption(p: ReportParams) -> ReportData:
                 "feed_issued_kg": _kg(issued.get(meta.id, 0)),
                 "birds_avg": metrics.birds_avg(totals.bird_days, days),
                 "feed_per_bird_day_kg": metrics.feed_per_bird_day_kg(totals.rp_feed_cents, totals.rp_bird_days),
-                "feed_per_egg_g": metrics.feed_per_egg_g(totals.rl_feed_cents, totals.rl_eggs),
+                "meat_kg": _kg(totals.meat_cents),
+                "fcr": metrics.fcr(totals.feed_cents, totals.meat_cents),
             }
         )
     current = scope.stats.total_current()
@@ -573,12 +582,14 @@ def feed_consumption(p: ReportParams) -> ReportData:
         "feed_issued_kg": _kg(sum(issued.values())),
         "birds_avg": metrics.birds_avg(current.bird_days, days),
         "feed_per_bird_day_kg": metrics.feed_per_bird_day_kg(current.rp_feed_cents, current.rp_bird_days),
-        "feed_per_egg_g": metrics.feed_per_egg_g(current.rl_feed_cents, current.rl_eggs),
+        "meat_kg": _kg(current.meat_cents),
+        "fcr": metrics.fcr(current.feed_cents, current.meat_cents),
     }
     summary = [
         ("Xonadonlar", str(len(rows))),
         ("Hisobotdagi yem, kg", _dec(totals["feed_reported_kg"])),
         ("Ombordan berilgan yem, kg", _dec(totals["feed_issued_kg"])),
+        ("FCR (yem/go‘sht)", _dec(totals["fcr"])),
     ]
     columns = [
         col("code", "Kod"),
@@ -588,7 +599,8 @@ def feed_consumption(p: ReportParams) -> ReportData:
         col("feed_issued_kg", "Ombordan berilgan yem kg", DECIMAL, 2),
         col("birds_avg", "O‘rtacha parranda", DECIMAL, 1),
         col("feed_per_bird_day_kg", "Yem/parranda/kun kg", DECIMAL, 3),
-        col("feed_per_egg_g", "Yem/tuxum g", DECIMAL, 1),
+        col("meat_kg", "Go‘sht kg", DECIMAL, 2),
+        col("fcr", "FCR", DECIMAL, 2),
     ]
     return ReportData(columns, rows, totals, summary)
 
@@ -946,10 +958,10 @@ def household_results(p: ReportParams) -> ReportData:
                 "household": meta.name,
                 "district": meta.district,
                 "birds_end": birds.birds_end,
-                "eggs": totals.eggs,
-                "laying_rate_pct": metrics.laying_rate_pct(totals.rl_eggs, totals.rl_layer_days),
+                "meat_kg": _kg(totals.meat_cents),
                 "feed_kg": _kg(totals.feed_cents),
-                "feed_per_egg_g": metrics.feed_per_egg_g(totals.rl_feed_cents, totals.rl_eggs),
+                "fcr": metrics.fcr(totals.feed_cents, totals.meat_cents),
+                "avg_weight_g": _avg_weight(totals),
                 "deaths": birds.deaths,
                 "mortality_pct": metrics.mortality_pct(birds.deaths, birds.bird_days, days),
                 "discipline_pct": metrics.discipline_pct(totals.reported_expected, totals.expected),
@@ -966,10 +978,10 @@ def household_results(p: ReportParams) -> ReportData:
         birds_end = current.birds_end
     totals = {
         "birds_end": birds_end,
-        "eggs": current.eggs,
-        "laying_rate_pct": metrics.laying_rate_pct(current.rl_eggs, current.rl_layer_days),
+        "meat_kg": _kg(current.meat_cents),
         "feed_kg": _kg(current.feed_cents),
-        "feed_per_egg_g": metrics.feed_per_egg_g(current.rl_feed_cents, current.rl_eggs),
+        "fcr": metrics.fcr(current.feed_cents, current.meat_cents),
+        "avg_weight_g": _avg_weight(current),
         "deaths": deaths,
         "mortality_pct": metrics.mortality_pct(deaths, bird_days, days),
         "discipline_pct": metrics.discipline_pct(current.reported_expected, current.expected),
@@ -978,8 +990,8 @@ def household_results(p: ReportParams) -> ReportData:
     }
     summary = [
         ("Xonadonlar", str(len(rows))),
-        ("Tuxum", _num(current.eggs)),
-        ("Tuxumdorlik", _percent(totals["laying_rate_pct"])),
+        ("Go‘sht, kg", _dec(totals["meat_kg"])),
+        ("FCR (yem/go‘sht)", _dec(totals["fcr"])),
         ("O‘lim", _percent(totals["mortality_pct"])),
     ]
     columns = [
@@ -987,10 +999,10 @@ def household_results(p: ReportParams) -> ReportData:
         col("household", "Xonadon"),
         col("district", "Tuman"),
         col("birds_end", "Parranda (oxirida)", INT),
-        col("eggs", "Tuxum", INT),
-        col("laying_rate_pct", "Tuxumdorlik %", PERCENT, 1),
+        col("meat_kg", "Go‘sht kg", DECIMAL, 2),
         col("feed_kg", "Yem kg", DECIMAL, 2),
-        col("feed_per_egg_g", "Yem/tuxum g", DECIMAL, 1),
+        col("fcr", "FCR", DECIMAL, 2),
+        col("avg_weight_g", "O‘rtacha vazn g", DECIMAL, 1),
         col("deaths", "Nobud", INT),
         col("mortality_pct", "O‘lim %", PERCENT, 1),
         col("discipline_pct", "Intizom %", PERCENT, 1),

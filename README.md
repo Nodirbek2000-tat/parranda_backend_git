@@ -80,6 +80,12 @@ Swagger UI faqat Django portida ishlaydi: `http://127.0.0.1:8000/api/docs` (Next
 
 ## Statistika algoritmlari (`stats/`)
 
+> **Faqat go‘sht (2026-11-05, mijoz qarori).** Kompaniya faqat go‘sht yo‘nalishidagi parranda bilan ishlaydi:
+> parranda turlari `BROILER` (Go‘sht yo‘nalishi) va `BREEDER` (Naslli); `DailyReport` da faqat go‘sht ko‘rsatkichlari
+> (migratsiyalar `farm.0004` — eski partiyalar `BROILER` ga o‘tkaziladi, `farm.0005` — maydon olib tashlanadi).
+> Asosiy natija — `meat_kg`. U API va modelda ixtiyoriy qoldi (o‘sayotgan to‘dada go‘sht chiqmagan kunlar bo‘ladi,
+> eski qatorlarda `null`); egasi formasida birinchi ishlab chiqarish maydoni sifatida ko‘rsatiladi.
+
 Barcha formulalar `API_CONTRACT_V2.md` §1.1–1.2 bo‘yicha; kod joylashuvi:
 
 1. **Kun** — Asia/Tashkent kalendar kuni; `today` so‘rov boshida bir marta olinadi. Ombor operatsiyasining kuni =
@@ -90,11 +96,13 @@ Barcha formulalar `API_CONTRACT_V2.md` §1.1–1.2 bo‘yicha; kod joylashuvi:
    Har xonadon/tur uchun bo‘lakli-o‘zgarmas funksiya (`Step`): qiymat `bisect` bilan, parranda-kunlar bo‘laklar
    bo‘yicha `qiymat × uzunlik` — kunlar soniga emas, o‘zgarishlar soniga bog‘liq. Kompaniya seriyasi farq massivi + prefiks yig‘indi.
    `DailyReport.bird_count` statistikada **ishlatilmaydi** (orqaga sanalangan harakatlar uni eskirtiradi).
-4. **Hisobotlar** (Q-c) — `(xonadon, kun indeksi, tuxum, yem×100)` butun sonlar; kun indeksi SQL’da hisoblanadi
-   (SQLite `julianday`, PostgreSQL `date − date`). Bitta o‘tishda: joriy/oldingi davr yig‘indilari, `R_L`
-   (qatlam parrandali kunlar), `R+`, kutilgan-va-topshirilgan kunlar, kunlik seriya.
-5. **Formulalar** (`metrics.py`, DB’siz unit testlangan): tuxumdorlik `100·Σeggs/ΣL`, yem/tuxum (aralash xonadonda yem
-   `L/B` ulushida), yem/parranda/kun, o‘lim `100·deaths/birds_avg`, hisobot intizomi, kunlar zaxirasi, tugash sanasi.
+4. **Hisobotlar** (Q-c) — `(xonadon, kun indeksi, go‘sht×100, yem×100, vazn×100 | −1)` butun sonlar; kun indeksi
+   SQL’da hisoblanadi (SQLite `julianday`, PostgreSQL `date − date`). Bitta o‘tishda: joriy/oldingi davr yig‘indilari,
+   `R+` (parrandali kunlar), vaznli kunlar (`Σ vazn·B`, `Σ B`), kutilgan-va-topshirilgan kunlar, kunlik seriya.
+5. **Formulalar** (`metrics.py`, DB’siz unit testlangan): go‘sht `Σ meat_kg` (`null` = 0), FCR `Σ feed_kg / Σ meat_kg`
+   (kamroq — yaxshi; go‘sht 0 bo‘lsa `null`), parranda boshiga go‘sht `Σ meat_kg / birds_avg`, o‘rtacha vazn
+   `Σ(avg_weight_g·B_h(d)) / Σ B_h(d)` (vazn kiritilgan va `B > 0` kunlar), yem/parranda/kun,
+   o‘lim `100·deaths/birds_avg`, hisobot intizomi, kunlar zaxirasi, tugash sanasi.
    Yig‘indilar aniq (yem va ombor miqdori yuzdan birlarda butun son), nisbatlar `Decimal` (28 xona), yaxlitlash faqat
    chiqishda `ROUND_HALF_UP`; `0` ga bo‘lish → `null`; delta yaxlitlanmagan qiymatlardan (`%` yoki `pp`).
 6. **Ombor** — boshlang‘ich qoldiq = davrdan oldingi oxirgi operatsiyaning `balance_after`; kunlik `(mahsulot, tur, kun)`
@@ -117,8 +125,9 @@ venv\Scripts\python.exe manage.py spectacular --validate --fail-on-warn --file s
 ```
 
 **`seed_demo`** — 1 admin (`demo_admin`, superuser), 1 omborchi (`demo_omborchi`), 3 tumanda koordinatali 12 xonadon
-(`demo_egasi1..12`, bittasi 12 kun oldin faolsizlantirilgan), 5 partiya (2 LAYER, 2 BROILER, 1 BREEDER), tarqatish,
-qaytarish, sotish va nobud bo‘lishlar, ≈60 kunlik kunlik hisobotlar (har xil tuxumdorlik, ba’zi kunlar o‘tkazib yuborilgan,
+(`demo_egasi1..12`, bittasi 12 kun oldin faolsizlantirilgan), 5 partiya (4 BROILER, 1 BREEDER), tarqatish,
+qaytarish, sotish va nobud bo‘lishlar, ≈60 kunlik kunlik hisobotlar (go‘sht, yem, o‘rtacha vazn; xonadonlarda har xil
+FCR, ba’zi kunlar o‘tkazib yuborilgan,
 bitta xonadonda yuqori o‘lim), 6 mahsulot va 60 kunlik kirim/chiqim tarixi. Hammasi biznes servislari orqali yaratiladi,
 so‘ng `created_at` vaqtlari tarixga suriladi. Parollar tasodifiy va **faqat** `demo_credentials.txt` fayliga yoziladi
 (git’ga qo‘shilmaydi); buyruq faqat fayl yo‘lini chiqaradi. Buyruqlar audit qatori yozmaydi.
@@ -282,8 +291,8 @@ venv\Scripts\python.exe manage.py test
 
 ~590 ta test (`manage.py test --parallel 4`). 1-bosqichdagilar (login/JWT/bloklash/throttle, OWNER ajratish, harakat/hisobot/ombor qoidalari,
 bildirishnomalar, bot endpointlari, dashboardlar) va 2-bosqich:
-- `stats/tests/test_metrics.py` — sof formulalar: §1.3 namunaviy misol (81.3, 135.7, 0.110, 0.8, 66.7, 24.0 kun,
-  28.11.2026), half-up yaxlitlash, `0` ga bo‘lish, delta qoidalari, `Step`, davr parametrlari va xatolari;
+- `stats/tests/test_metrics.py` — sof formulalar: §1.3 namunaviy misol (go‘sht 66 kg, FCR 1.83, go‘sht/parranda 0.124 kg,
+  o‘rtacha vazn 1908.8 g, 0.110, 0.8, 66.7, 24.0 kun, 28.11.2026), half-up yaxlitlash, `0` ga bo‘lish, delta qoidalari, `Step`, davr parametrlari va xatolari;
 - `stats/tests/test_api.py` — misol API orqali, oldingi davr, seriya (N ta, eski → yangi, nol bilan), orqaga sanalangan
   harakat, `bird_count` e’tiborsizligi, vaqt mintaqasi chegarasi (19:30Z → ertangi kun), partiya invarianti,
   `closing_balance = oxirgi balance_after`, reyting/yuqori o‘lim, rollar matritsasi, bot xulosasi;
@@ -319,7 +328,7 @@ bildirishnomalar, bot endpointlari, dashboardlar) va 2-bosqich:
 - Superuser’lar superuser bo‘lmagan ADMIN uchun `/api/users` da ko‘rinmaydi (`404`).
 - `change-password` Django `AUTH_PASSWORD_VALIDATORS` ni ham tekshiradi; “kamida 8 belgi” qoidasi saqlangan.
 - `GET /api/users?role=` vergul bilan bir nechta qiymat qabul qiladi (`role=ADMIN,WAREHOUSE`).
-- `dashboard/admin`: `reports_today` faqat **faol** xonadonlar hisobotlarini sanaydi; `eggs_today`/`feed_used_today` barcha hisobotlarni.
+- `dashboard/admin`: `reports_today` faqat **faol** xonadonlar hisobotlarini sanaydi; `meat_today`/`feed_used_today` barcha hisobotlarni.
 - SQLite `SELECT ... FOR UPDATE` ni e’tiborsiz qoldiradi, shuning uchun bazaga `transaction_mode=IMMEDIATE` berilgan.
 - `PATCH /api/households/{id}`: natijada `latitude`/`longitude` ikkalasi ham bor yoki ikkalasi ham yo‘q bo‘lishi shart.
 - Barcha id’lar (URL, query, body) 64-bit oralig‘ida tekshiriladi: juda katta id → `400`/`404`, hech qachon `500` emas.
@@ -344,10 +353,9 @@ bildirishnomalar, bot endpointlari, dashboardlar) va 2-bosqich:
 - Audit: `GET /api/audit-logs/{id}` ham bor (shunda `PUT/PATCH/DELETE` `405` qaytaradi). `seed_demo --reset` audit qatorlarini
   o‘chirmaydi (o‘zgarmas); o‘chirilgan foydalanuvchining qatorlarida `actor = null`, `actor_name` saqlanadi.
 - Audit konteksti middleware’da: `/api/bot/...` → `BOT` (IP `null`), `/admin/...` → `ADMIN`, qolgani → `API`.
-- Yem/tuxum (§1.2): `feed × L/B` ulushi 1 dan oshmaydi. Orqa sana bilan kiritilgan DEATH/OUT (1-bosqich qoidasi bo‘yicha
-  *joriy* son bilan tekshiriladi) boshqa tur sonini o‘tgan kunda manfiy qilishi mumkin; shunda `B ≤ L` (hatto `B = 0`)
-  bo‘ladi — bunday kunda butun yem qatlam parrandalariga yoziladi (0 ga bo‘lish → 500 bo‘lmaydi). Bunday tarix
-  `check_integrity` da ogohlantirish sifatida chiqadi.
+- Orqa sana bilan kiritilgan eski DEATH/OUT (1-bosqich qoidasi bo‘yicha *joriy* son bilan tekshirilgan) bir tur sonini
+  o‘tgan kunda manfiy qilishi mumkin; shunda o‘sha kun `B ≤ 0` bo‘ladi: go‘sht va yem (FCR) hisobga kiradi, o‘sha kunning
+  vazni o‘rtacha vaznga kirmaydi (0 ga bo‘lish → 500 bo‘lmaydi). Bunday tarix `check_integrity` da ogohlantirish sifatida chiqadi.
 - `GET /api/audit-logs`: `date_from`/`date_to` §8.1 bo‘yicha tekshiriladi (366 kun chegarasisiz): `date_to > bugun` →
   “Sana kelajakda…”, `date_from < 2000-01-01` → “Sana 01.01.2000 dan oldin…”, `date_from > date_to` → tartib xatosi.
 - Statistika: faqat `date_to` berilib, standart boshlanish `date.min` dan oldinga tushsa (`date_to=0001-01-05`),
@@ -379,7 +387,7 @@ bildirishnomalar, bot endpointlari, dashboardlar) va 2-bosqich:
 - Operatsiya `reference.path`: `vaccination` → `/vet?tab=vaccinations`, `treatment` → `/vet?tab=treatments`; OWNER uchun
   logistika topshirig‘i → `/my/orders/{order_id}` (buyurtmasiz bo‘lsa `/my/deliveries`), boshqalari `null`.
 - Hisobotlarda `poultry_type` filtri: xonadonlar to‘plami (shu turdagi partiya harakati bor xonadonlar), parranda soni va
-  nobud/o‘lim shu tur bo‘yicha; tuxum va yem hisobotda tur bo‘yicha ajratilmaydi, shuning uchun xonadon bo‘yicha qoladi.
+  nobud/o‘lim shu tur bo‘yicha; go‘sht, yem va vazn hisobotda tur bo‘yicha ajratilmaydi, shuning uchun xonadon bo‘yicha qoladi.
 - `reports` throttle (30/daqiqa) faqat fayl eksportiga (xlsx/pdf) qo‘llanadi; JSON ko‘rish cheklanmaydi.
 - `?format=` DRF’ning renderer parametri emas — hisobot formati (maxsus content negotiation).
 - §1.2 jadvalida W uchun “stock, feed, movements” deyilgan, §11.2 jadvalida esa W kunlik/oylik ishlab chiqarishni ham ko‘radi —
@@ -412,7 +420,8 @@ egalari belgilanadi), `notifications.0004` (`NotificationPreference`).
   sozlamalari `/api/my/notification-preferences`; `STOCK_DOCUMENT` fayllari (`file_ids` kirim/chiqimda, `files`
   har operatsiyada); `stock_balance` hisobotida markazdagi parranda; `seed_demo` V3 modullarini ham to‘ldiradi
   (L/V xodimlar, transport, buyurtmalar, topshiriqlar, vet, partiyalar) va xonadonlarni `is_demo` qiladi.
-- **Rejali vazifalar**: `..\scriptsegister_scheduled_tasks.ps1` — Task Scheduler’da `backup_db --keep 14 --with-media`
+- **Rejali vazifalar**: `..\scripts
+egister_scheduled_tasks.ps1` — Task Scheduler’da `backup_db --keep 14 --with-media`
   (har kuni), `cleanup_files`, `flushexpiredtokens` (haftalik), `send_reminders` (har 15 daqiqa). Skript faqat ro‘yxatga
   oladi; o‘chirish `-Remove`.
 - Real `db.sqlite3` Fix bosqichida `manage.py migrate` qilindi; `check_integrity` toza.

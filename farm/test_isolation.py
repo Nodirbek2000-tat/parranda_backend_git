@@ -114,7 +114,7 @@ class OwnerWriteIsolationTests(BaseAPITestCase):
     def test_daily_report_household_is_forced_to_own(self):
         response = self.client.post(
             "/api/daily-reports",
-            {"household": self.household_b.pk, "feed_kg": 10, "eggs": 5, "deaths": 1},
+            {"household": self.household_b.pk, "feed_kg": 10, "meat_kg": 5, "deaths": 1},
             format="json",
         )
         self.assertEqual(response.status_code, 201)
@@ -127,7 +127,7 @@ class OwnerWriteIsolationTests(BaseAPITestCase):
         distribute(self.admin, other_batch, self.household_b, 50)
         response = self.client.post(
             "/api/daily-reports",
-            {"feed_kg": 10, "eggs": 5, "deaths": 1, "batch": other_batch.pk},
+            {"feed_kg": 10, "meat_kg": 5, "deaths": 1, "batch": other_batch.pk},
             format="json",
         )
         self.assertEqual(response.status_code, 400)
@@ -144,7 +144,7 @@ class OwnerWriteIsolationTests(BaseAPITestCase):
         self.assertEqual(self.client.get("/api/dashboard/owner").status_code, 403)
         death = self.client.post("/api/movements", {"batch": self.batch.pk, "type": "DEATH", "quantity": 1}, format="json")
         self.assertEqual(death.status_code, 403)
-        report = self.client.post("/api/daily-reports", {"feed_kg": 1, "eggs": 1}, format="json")
+        report = self.client.post("/api/daily-reports", {"feed_kg": 1, "meat_kg": 1}, format="json")
         self.assertEqual(report.status_code, 403)
 
 
@@ -190,7 +190,7 @@ class IdHardeningTests(BaseAPITestCase):
     def test_batch_quantity_is_bounded(self):
         response = self.client.post(
             "/api/batches",
-            {"poultry_type": "LAYER", "breed": "X", "initial_quantity": 10**12, "age_days": 1,
+            {"poultry_type": "BROILER", "breed": "X", "initial_quantity": 10**12, "age_days": 1,
              "supplier": "S", "arrived_at": "2026-01-01"},
             format="json",
         )
