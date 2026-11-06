@@ -11,7 +11,8 @@ from accounts.models import Role
 
 from . import stages as chain
 from .models import CaseStatus, RequestKind, StageStatus
-from .services import can_flags
+from .services import (NEXT_CYCLE_CHOICES, can_flags, can_start_next_cycle, default_next_cycle_stage,
+                       household_cycles)
 
 FILE_SIGNER = signing.TimestampSigner(salt="nnp.files")
 FILE_URL_MAX_AGE = 12 * 3600
@@ -68,7 +69,7 @@ def case_item(case):
     stage = _current_stage(case)
     in_progress = case.status == CaseStatus.IN_PROGRESS
     return {
-        "id": case.pk, "code": case.code, "name": case.name, "owner_full_name": case.owner_full_name,
+        "id": case.pk, "code": case.code, "cycle": case.cycle, "name": case.name, "owner_full_name": case.owner_full_name,
         "owner_phone": case.owner_phone, "region": case.region, "district": case.district, "mfy": case.mfy,
         "latitude": float(case.latitude) if case.latitude is not None else None,
         "longitude": float(case.longitude) if case.longitude is not None else None,
@@ -95,7 +96,7 @@ def stage_json(stage, photos, documents):
         "submitted_by": user_brief(stage.submitted_by), "submitted_at": stage.submitted_at,
         "decided_by": user_brief(stage.decided_by), "decided_at": stage.decided_at,
         "return_reason": stage.return_reason,
-        "has_act": chain.has_act(stage.number) and stage.status == StageStatus.DONE,
+        "has_act": chain.has_act(stage.number) and stage.status == StageStatus.DONE and not (stage.data or {}).get("carried_over"),
         "photos": [photo_json(p) for p in photos if p.stage == stage.number],
         "documents": [document_json(doc) for doc in documents if doc.stage == stage.number],
     }
@@ -127,6 +128,12 @@ def case_detail(case, user):
         "can": can_flags(user, case, current),
         "vet_user": user_brief(case.vet_user),
         "growing": growing_info(case, next((s for s in stages if s.number == chain.GROWING_STAGE), None)),
+        "cycles": [{"id": c.pk, "code": c.code, "cycle": c.cycle, "status": c.status} for c in household_cycles(case)],
+        "next_cycle": {
+            "can": can_start_next_cycle(user, case),
+            "default_stage": default_next_cycle_stage(),
+            "options": [{"number": n, "title": chain.get(n).title} for n in NEXT_CYCLE_CHOICES],
+        },
     })
     growing = data["can"]["create_request"] or growing_period(case, stages)
     requests = request_queryset(visible_requests(user).filter(case=case))

@@ -633,3 +633,36 @@ class CaseListSummaryTests(GrowingHelpers):
         admin = self.client_for(R.ADMIN)
         self.assertEqual([r["id"] for r in admin.get("/api/cases", {"district": "Pop tumani"}).json()], [cid])
         self.assertEqual(admin.get("/api/cases", {"district": "Urgut tumani"}).json(), [])
+
+
+class GeoReportTests(GrowingHelpers):
+    def test_district_matching(self):
+        from .geo import canonical
+
+        self.assertEqual(canonical("Urgut"), "Urgut tumani")
+        self.assertEqual(canonical("  bulungʻur  tumani "), "Bulung‘ur tumani")
+        self.assertEqual(canonical("Kattaqo'rg'on tumani"), "Kattaqo‘rg‘on tumani")
+        self.assertEqual(canonical("Samarqand"), "Samarqand shahri")
+        self.assertIsNone(canonical("Pop tumani"))
+        self.assertIsNone(canonical(""))
+
+    def test_overview_has_districts_and_points(self):
+        a = self.create_case(district="Urgut", latitude="39.4", longitude="67.25")["id"]
+        b = self.create_case(district="Bulung'ur tumani", latitude="39.77", longitude="67.27")["id"]
+        Case.objects.filter(pk=self.create_case(district="")["id"]).update(latitude=None, longitude=None)
+        admin = self.client_for(R.ADMIN)
+        g = admin.get("/api/reports/overview").json()["geo"]
+        rows = {r["name"]: r for r in g["districts"]}
+        self.assertEqual(len([r for r in g["districts"] if r["latitude"] is not None]), 16)
+        self.assertEqual((rows["Urgut tumani"]["total"], rows["Urgut tumani"]["in_progress"]), (1, 1))
+        self.assertEqual(rows["Bulung‘ur tumani"]["total"], 1)
+        self.assertEqual(rows["Boshqa / ko‘rsatilmagan"]["total"], 1)
+        self.assertEqual({p["id"] for p in g["points"]}, {a, b})
+        # the district filter narrows the points and the numbers, but the map keeps every district
+        r = admin.get("/api/reports/overview", {"district": "Urgut tumani"}).json()
+        self.assertEqual(r["cases"]["total"], 1)
+        self.assertEqual(r["geo"]["selected"], "Urgut tumani")
+        self.assertEqual([p["id"] for p in r["geo"]["points"]], [a])
+        self.assertEqual({x["name"]: x["total"] for x in r["geo"]["districts"]}["Bulung‘ur tumani"], 1)
+        # the household list uses the same matching
+        self.assertEqual([c["id"] for c in admin.get("/api/cases", {"district": "Bulung‘ur tumani"}).json()], [b])

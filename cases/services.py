@@ -477,6 +477,86 @@ def owner_account(user: User, case_id: int, *, link_user_id: int | None = None) 
     return {"username": owner.username, "temp_password": password, "user_id": owner.pk}
 
 
+# --- Next partiya (batch) -----------------------------------------------------------------------
+
+#: A new partiya may start from HR (2) at the earliest and from chick delivery (7) at the latest.
+NEXT_CYCLE_CHOICES = tuple(range(2, chain.DELIVERY_STAGE + 1))
+CARRIED_OVER = "carried_over"
+
+
+def default_next_cycle_stage() -> int:
+    from django.conf import settings
+
+    value = int(getattr(settings, "NEXT_CYCLE_START_STAGE", chain.INCUBATION_STAGE))
+    return value if value in NEXT_CYCLE_CHOICES else chain.INCUBATION_STAGE
+
+
+def household_cycles(case: Case):
+    """All partiyas of the household of `case`, oldest first."""
+    root_id = case.root_id or case.pk
+    return Case.objects.filter(Q(pk=root_id) | Q(root_id=root_id)).order_by("cycle", "pk")
+
+
+def can_start_next_cycle(user: User, case: Case) -> bool:
+    """Admin starts the next partiya of a finished household, only from its latest partiya."""
+    if user.role not in (Role.ADMIN, Role.SUPERADMIN) or case.status != CaseStatus.DONE:
+        return False
+    return not household_cycles(case).filter(cycle__gt=case.cycle).exists()
+
+
+def is_carried_over(stage: CaseStage) -> bool:
+    return bool((stage.data or {}).get(CARRIED_OVER))
+
+
+@transaction.atomic
+def start_next_cycle(user: User, case_id: int, *, start_stage: int | None = None) -> Case:
+    """New case for the next partiya: household data, owner and vet are copied; stages before `start_stage`
+    (paperwork, construction, ...) are carried over as DONE without work, and `start_stage` opens now."""
+    previous = _lock(case_id)
+    start = default_next_cycle_stage() if start_stage is None else start_stage
+    if start not in NEXT_CYCLE_CHOICES:
+        raise ChainError("Boshlanish bosqichi noto‘g‘ri.", 400,
+                         errors={"start_stage": [f"{NEXT_CYCLE_CHOICES[0]}–{NEXT_CYCLE_CHOICES[-1]} oralig‘ida."]})
+    if previous.status != CaseStatus.DONE:
+        raise ChainError("Yangi partiya faqat oldingi partiya yakunlangandan keyin boshlanadi.", 409)
+    if not can_start_next_cycle(user, previous):
+        if user.role not in (Role.ADMIN, Role.SUPERADMIN):
+            raise ChainError(MSG_FORBIDDEN, 403)
+        raise ChainError("Bu xonadonning keyingi partiyasi allaqachon boshlangan.", 409)
+
+    now = timezone.now()
+    root = previous.root or previous
+    cycle = previous.cycle + 1
+    case = Case.objects.create(
+        **{key: getattr(previous, key) for key in HOUSEHOLD_FIELDS},
+        package=previous.package, owner_user=previous.owner_user, vet_user=previous.vet_user,
+        cycle=cycle, root=root, created_by=user, current_stage=start,
+    )
+    case.code = f"{root.code}-{cycle}"
+    case.save(update_fields=["code"])
+
+    first_data = next((st.data for st in previous.stages.all() if st.number == 1), None) or {}
+    note = f"{previous.code} partiyasidan o‘tkazildi"
+    stages = []
+    for definition in chain.STAGES:
+        stage = CaseStage(case=case, number=definition.number, key=definition.key)
+        if definition.number < start:
+            stage.status, stage.activated_at, stage.note = StageStatus.DONE, now, note
+            stage.data = {CARRIED_OVER: True, "from_case": previous.code}
+            if definition.number == 1:
+                stage.data = {**{k: v for k, v in first_data.items() if k != "finance"}, **stage.data}
+        elif definition.number == start:
+            _open(stage, StageStatus.ACTIVE, now)
+        stages.append(stage)
+    CaseStage.objects.bulk_create(stages)
+
+    event = _event(case, start, StageEvent.CREATE, user,
+                   f"{cycle}-partiya ({previous.code} dan) {start}-bosqichdan boshlandi",
+                   cycle=cycle, previous=previous.code, start_stage=start)
+    _notify("active", executor_users(case, start), case, case.stages.get(number=start), f"ev{event.pk}:active")
+    return case
+
+
 def _stage_def(number: int) -> chain.Stage:
     if number not in chain.BY_NUMBER:
         raise ChainError("Bosqich topilmadi.", 404)

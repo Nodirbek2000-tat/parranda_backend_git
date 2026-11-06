@@ -94,7 +94,7 @@ def _data_lines(stage) -> str:
     labels = {f.name: f for f in d.fields}
     rows = []
     for key, value in (stage.data or {}).items():
-        if key in ("package_id", "finance"):
+        if key in ("package_id", "finance", "carried_over", "from_case"):
             continue
         f = labels.get(key)
         if f and f.choices:

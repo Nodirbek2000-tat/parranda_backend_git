@@ -151,6 +151,9 @@ CHICK_PRICE: int = env.int("CHICK_PRICE", 8000)
 # Estimated revenue on the Xonadonlar list until the real sale is entered (DEMO defaults).
 EST_KG_PER_BIRD: float = env.float("EST_KG_PER_BIRD", 2.5)
 EST_PRICE_PER_KG: int = env.int("EST_PRICE_PER_KG", 30000)
+# The next partiya of a finished household starts from this stage (default 6 = Inkubatsiya); the earlier stages
+# (inspection, HR, director, construction, warehouse) are carried over. Admin may pick another one per start.
+NEXT_CYCLE_START_STAGE: int = env.int("NEXT_CYCLE_START_STAGE", 6)
 
 LOG_LEVEL: str = env.str("LOG_LEVEL", "INFO").upper()
 LOGGING = {

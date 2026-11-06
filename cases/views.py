@@ -13,6 +13,7 @@ from audit.models import log
 from stock.models import Package, Product
 from stock.serializers import product_json
 
+from . import geo
 from . import serializers as s
 from . import services
 from . import stages as chain
@@ -24,10 +25,10 @@ def chain_response(exc: ChainError) -> Response:
     return Response({"detail": exc.detail, **exc.extra}, status=exc.status)
 
 
-def _detail(case_id, request):
+def _detail(case_id, request, status=200):
     case = get_object_or_404(services.visible_cases(request.user).select_related(
         "package", "owner_user", "created_by", "vet_user"), pk=case_id)
-    return Response(s.case_detail(case, request.user))
+    return Response(s.case_detail(case, request.user), status=status)
 
 
 class CaseListView(APIView):
@@ -39,10 +40,8 @@ class CaseListView(APIView):
         if params.get("stage", "").isdigit():
             qs = qs.filter(current_stage=int(params["stage"]))
         if params.get("district"):
-            # "Urgut tumani" also matches households saved as just "Urgut"
-            name = params["district"].strip()
-            base = name.removesuffix(" tumani").removesuffix(" shahri").strip()
-            qs = qs.filter(Q(district__iexact=name) | Q(district__iexact=base))
+            # "Urgut tumani" also matches households saved as just "Urgut" (or with another apostrophe)
+            qs = qs.filter(geo.district_q(params["district"]))
         if params.get("search"):
             term = params["search"].strip()
             qs = qs.filter(Q(code__icontains=term) | Q(name__icontains=term) | Q(owner_full_name__icontains=term)
@@ -161,6 +160,25 @@ class CasePdfView(APIView):
         return response
 
 
+class NextCycleView(APIView):
+    """POST /api/cases/{pk}/next-cycle {start_stage?} — Admin starts the next partiya of a finished household."""
+
+    permission_classes = [IsAdmin]
+
+    def post(self, request, pk):
+        get_object_or_404(services.visible_cases(request.user), pk=pk)
+        raw = request.data.get("start_stage") if isinstance(request.data, dict) else None
+        try:
+            start = int(raw) if raw not in (None, "") else None
+        except (TypeError, ValueError):
+            raise ValidationError({"start_stage": ["Butun son kiriting."]}) from None
+        try:
+            case = services.start_next_cycle(request.user, pk, start_stage=start)
+        except ChainError as exc:
+            return chain_response(exc)
+        return _detail(case.pk, request, status=201)
+
+
 class StageActPdfView(APIView):
     """GET /api/cases/{pk}/stages/{n}/act — act of one finished stage (staff only, not the owner's stage)."""
 
@@ -171,7 +189,7 @@ class StageActPdfView(APIView):
             raise PermissionDenied("Bu bosqich uchun dalolatnoma yo‘q.")
         case = get_object_or_404(services.visible_cases(request.user).select_related("package"), pk=pk)
         stage = get_object_or_404(case.stages.select_related("submitted_by", "decided_by"), number=n)
-        if stage.status != StageStatus.DONE:
+        if stage.status != StageStatus.DONE or services.is_carried_over(stage):
             return Response({"detail": "Bosqich hali tasdiqlanmagan."}, status=409)
         response = HttpResponse(stage_act_pdf(case, stage), content_type="application/pdf")
         response["Content-Disposition"] = f'inline; filename="dalolatnoma-{case.code}-{n}.pdf"'

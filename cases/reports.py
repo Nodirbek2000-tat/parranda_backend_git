@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from accounts.auth import IsAdmin
 from accounts.models import User
 
+from . import geo
 from . import stages as chain
 from .finance import COST_KEYS, case_finance
 from .models import (Case, CaseStage, CaseStatus, Request, RequestStatus, StageEvent, StageStatus, VetVisit,
@@ -57,8 +58,7 @@ def filtered_cases(params):
         qs = qs.filter(created_at__date__lte=date_to)
     district = (params.get("district") or "").strip()
     if district:
-        base = district.removesuffix(" tumani").removesuffix(" shahri").strip()
-        qs = qs.filter(Q(district__iexact=district) | Q(district__iexact=base))
+        qs = qs.filter(geo.district_q(district))
     return qs, date_from, date_to
 
 
@@ -167,7 +167,51 @@ def overview(params) -> dict:
             "cancelled": visits.filter(status=VisitStatus.CANCELLED).count(),
         },
         "finance": fin,
+        "geo": geo_report(params, now),
     }
+
+
+def geo_report(params, now) -> dict:
+    """The region map: every district with its numbers (dates applied, district filter NOT applied, so the map
+    always shows the whole viloyat) and the households with a location (district filter applied)."""
+    from .summary import summaries
+
+    qs, _, _ = filtered_cases({"date_from": params.get("date_from"), "date_to": params.get("date_to")})
+    cases = list(qs.select_related("package").prefetch_related("stages"))
+    stats = summaries(cases)
+    rows = {name: {"name": name, "latitude": lat, "longitude": lng, "total": 0, "in_progress": 0, "done": 0,
+                   "rejected": 0, "overdue": 0, "birds": 0, "cost": 0, "revenue": 0}
+            for name, lat, lng in geo.DISTRICTS}
+    selected = geo.canonical(params.get("district") or "")
+    points = []
+    for case in cases:
+        name = geo.canonical(case.district)
+        row = rows.setdefault(name or geo.OTHER, {
+            "name": geo.OTHER, "latitude": None, "longitude": None, "total": 0, "in_progress": 0, "done": 0,
+            "rejected": 0, "overdue": 0, "birds": 0, "cost": 0, "revenue": 0})
+        s = stats.get(case.pk) or {}
+        current = next((st for st in case.stages.all() if st.number == case.current_stage), None)
+        running = case.status == CaseStatus.IN_PROGRESS
+        overdue = bool(running and current is not None and current.is_overdue)
+        row["total"] += 1
+        row[{"IN_PROGRESS": "in_progress", "DONE": "done", "REJECTED": "rejected"}[case.status]] += 1
+        row["overdue"] += overdue
+        row["birds"] += (s.get("birds") or 0) if running else 0
+        row["cost"] += s.get("total_cost") or 0
+        row["revenue"] += s.get("revenue") or 0 if case.status != CaseStatus.REJECTED else 0
+        if case.latitude is None or case.longitude is None:
+            continue
+        if params.get("district") and name != selected:
+            continue
+        points.append({
+            "id": case.pk, "code": case.code, "cycle": case.cycle, "owner_full_name": case.owner_full_name,
+            "district": name or case.district, "mfy": case.mfy,
+            "latitude": float(case.latitude), "longitude": float(case.longitude),
+            "status": case.status, "current_stage": case.current_stage,
+            "stage_title": chain.get(case.current_stage).title, "is_overdue": overdue,
+            "birds": s.get("birds"), "days_since_delivery": s.get("days_since_delivery"),
+        })
+    return {"selected": selected, "districts": list(rows.values()), "points": points}
 
 
 def cases_report(params) -> list[dict]:
@@ -329,11 +373,15 @@ def overview_sheets(d):
                  for r in d["per_stage"]]
     timing_rows = [[r["number"], r["title"], r["on_time"], r["late"], r["open_late"]] for r in d["per_stage_timing"]]
     requests = [[r["status_display"], r["count"]] for r in d["requests"]["by_status"]]
+    districts = [[r["name"], r["total"], r["in_progress"], r["done"], r["rejected"], r["overdue"], r["birds"], r["cost"],
+                  r["revenue"]] for r in d["geo"]["districts"]]
     return [
         ("Umumiy", ["Ko‘rsatkich", "Qiymat"], [list(r) for r in summary]),
         ("Bosqichlar", ["#", "Bosqich", "Jami", "Faol", "Tasdiq kutmoqda", "Qaytarilgan", "Muddati o‘tgan"], per_stage),
         ("Muddatlar", ["#", "Bosqich", "O‘z vaqtida", "Kechikkan", "Kechikmoqda"], timing_rows),
         ("So‘rovlar", ["Holat", "Soni"], requests),
+        ("Tumanlar", ["Tuman / shahar", "Jami", "Jarayonda", "Yakunlangan", "Rad etilgan", "Muddati o‘tgan",
+                      "Parranda (hozir)", "Xarajat", "Daromad"], districts),
     ]
 
 

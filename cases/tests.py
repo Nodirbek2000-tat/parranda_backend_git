@@ -545,3 +545,80 @@ class OnlyOwnRoleSubmitsTests(ChainHelpers):
         self.submit(R.DIRECTOR, cid, 3)
         self.assertEqual(Case.objects.get(pk=cid).current_stage, 4)
         self.submit(R.WAREHOUSE, cid, 4, photo=True, expect=403)
+
+
+class NextCycleTests(ChainHelpers):
+    """2-partiya: after the first partiya is DONE, Admin starts the next one from Inkubatsiya (or a chosen stage)."""
+
+    def finished_case(self) -> int:
+        cid = self.create_case()["id"]
+        self.advance_to(cid, 13)
+        self.submit(R.ACCOUNTANT, cid, 13, {"financing_type": "credit", "contract_no": "SH-1", "price_per_kg": 32000})
+        self.act(R.SUPERADMIN, cid, 13, "approve")
+        self.assertEqual(Case.objects.get(pk=cid).status, "DONE")
+        return cid
+
+    def test_start_second_partiya_from_incubation(self):
+        cid = self.create_case()["id"]
+        admin = self.client_for(R.ADMIN)
+        detail = admin.get(f"/api/cases/{cid}").json()
+        self.assertFalse(detail["next_cycle"]["can"])  # first partiya still in progress
+        self.assertEqual(admin.post(f"/api/cases/{cid}/next-cycle", {}, format="json").status_code, 409)
+
+        self.link_owner(cid)
+        self.advance_to(cid, 13)
+        self.submit(R.ACCOUNTANT, cid, 13, {"financing_type": "credit", "contract_no": "SH-1", "price_per_kg": 32000})
+        self.act(R.SUPERADMIN, cid, 13, "approve")
+        first = Case.objects.get(pk=cid)
+        detail = admin.get(f"/api/cases/{cid}").json()
+        self.assertTrue(detail["next_cycle"]["can"])
+        self.assertEqual(detail["next_cycle"]["default_stage"], 6)
+        self.assertEqual([o["number"] for o in detail["next_cycle"]["options"]], [2, 3, 4, 5, 6, 7])
+        # only Admin / Super Admin start it
+        for role in (R.INSPECTOR, R.INCUBATOR, R.OWNER):
+            self.assertIn(self.client_for(role).post(f"/api/cases/{cid}/next-cycle", {}, format="json").status_code,
+                          (403, 404))
+
+        with self.captureOnCommitCallbacks(execute=True):
+            r = admin.post(f"/api/cases/{cid}/next-cycle", {}, format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        new = r.json()
+        self.assertEqual(new["code"], f"{first.code}-2")
+        self.assertEqual(new["cycle"], 2)
+        self.assertEqual((new["status"], new["current_stage"]), ("IN_PROGRESS", 6))
+        for n in range(1, 6):
+            st = self.stage(new, n)
+            self.assertEqual(st["status"], "DONE")
+            self.assertTrue(st["data"]["carried_over"])
+            self.assertFalse(st["has_act"])
+        self.assertEqual(self.stage(new, 6)["status"], "ACTIVE")
+        self.assertEqual(new["district"], first.district)
+        self.assertEqual(new["owner_user"]["id"], first.owner_user_id)
+        self.assertEqual([c["code"] for c in new["cycles"]], [first.code, f"{first.code}-2"])
+        # the package (jo‘jaxona) is not paid again
+        fin = admin.get(f"/api/cases/{new['id']}").json().get("finance")
+        self.assertTrue(fin is None or fin["package_cost"] == 0)
+        # the incubator got the task
+        self.assertTrue(Notification.objects.filter(user=self.users[R.INCUBATOR], button_path=f"/cases/{new['id']}")
+                        .exists())
+        # the old partiya cannot start another one; the new one runs as usual
+        self.assertEqual(admin.post(f"/api/cases/{cid}/next-cycle", {}, format="json").status_code, 409)
+        self.assertFalse(admin.get(f"/api/cases/{cid}").json()["next_cycle"]["can"])
+        self.submit(R.INCUBATOR, new["id"], 6, {"chicks_count": 120}, photo=True)
+        self.act(R.ADMIN, new["id"], 6, "approve")
+        self.assertEqual(Case.objects.get(pk=new["id"]).current_stage, 7)
+        # the owner sees both partiyas
+        codes = {c["code"] for c in self.client_for(R.OWNER).get("/api/cases").json()}
+        self.assertEqual(codes, {first.code, f"{first.code}-2"})
+
+    def test_chosen_start_stage_and_validation(self):
+        cid = self.finished_case()
+        admin = self.client_for(R.SUPERADMIN)
+        self.assertEqual(admin.post(f"/api/cases/{cid}/next-cycle", {"start_stage": 9}, format="json").status_code, 400)
+        self.assertEqual(admin.post(f"/api/cases/{cid}/next-cycle", {"start_stage": "x"}, format="json").status_code,
+                         400)
+        r = admin.post(f"/api/cases/{cid}/next-cycle", {"start_stage": 5}, format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["current_stage"], 5)
+        self.assertEqual(self.stage(r.json(), 4)["status"], "DONE")
+        self.assertEqual(self.stage(r.json(), 5)["status"], "ACTIVE")

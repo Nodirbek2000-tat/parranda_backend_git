@@ -55,7 +55,9 @@ def finance(case, *, revenue=None, price_per_kg=None, final: bool = False) -> di
     stages = _stages(case)
     data = {n: (st.data or {}) for n, st in stages.items()}
     warehouse = stages.get(chain.WAREHOUSE_STAGE)
-    package_cost = _int(case.package.price) if warehouse and warehouse.status in SUBMITTED_OR_DONE else 0
+    # a later partiya carries the warehouse stage over: the package (jo‘jaxona) is not paid again
+    issued = warehouse and warehouse.status in SUBMITTED_OR_DONE and not (warehouse.data or {}).get("carried_over")
+    package_cost = _int(case.package.price) if issued else 0
 
     chicks = data.get(chain.INCUBATION_STAGE, {}).get("chicks_count")
     chicks = chicks if isinstance(chicks, int) else None

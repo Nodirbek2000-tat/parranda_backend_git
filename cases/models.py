@@ -44,6 +44,11 @@ class Case(models.Model):
                                  related_name="vet_cases", verbose_name="Veterinar")
     status = models.CharField(max_length=20, choices=CaseStatus.choices, default=CaseStatus.IN_PROGRESS, db_index=True)
     current_stage = models.PositiveSmallIntegerField(default=1, db_index=True)
+    #: Partiya (batch) of the household: 1 = the first case; 2, 3, ... are started from the previous one and
+    #: point to the first case through `root`.
+    cycle = models.PositiveSmallIntegerField("Partiya", default=1)
+    root = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="later_cycles",
+                             verbose_name="1-partiya")
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,
                                    related_name="created_cases")
     created_at = models.DateTimeField(auto_now_add=True)
