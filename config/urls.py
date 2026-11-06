@@ -38,6 +38,7 @@ urlpatterns = [
     path("api/cases/<int:pk>/reject", cases.RejectView.as_view()),
     path("api/cases/<int:pk>/owner-account", cases.OwnerAccountView.as_view()),
     path("api/cases/<int:pk>/pdf", cases.CasePdfView.as_view()),
+    path("api/cases/<int:pk>/stages/<int:n>/act", cases.StageActPdfView.as_view()),
     path("api/cases/<int:pk>/assign-vet", grow.AssignVetView.as_view()),
     path("api/cases/<int:pk>/requests", grow.CaseRequestCreateView.as_view()),
     path("api/dashboard", cases.DashboardView.as_view()),

@@ -95,6 +95,7 @@ def stage_json(stage, photos, documents):
         "submitted_by": user_brief(stage.submitted_by), "submitted_at": stage.submitted_at,
         "decided_by": user_brief(stage.decided_by), "decided_at": stage.decided_at,
         "return_reason": stage.return_reason,
+        "has_act": chain.has_act(stage.number) and stage.status == StageStatus.DONE,
         "photos": [photo_json(p) for p in photos if p.stage == stage.number],
         "documents": [document_json(doc) for doc in documents if doc.stage == stage.number],
     }

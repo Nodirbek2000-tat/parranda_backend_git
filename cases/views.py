@@ -161,6 +161,23 @@ class CasePdfView(APIView):
         return response
 
 
+class StageActPdfView(APIView):
+    """GET /api/cases/{pk}/stages/{n}/act — act of one finished stage (staff only, not the owner's stage)."""
+
+    def get(self, request, pk, n):
+        from .pdf import stage_act_pdf
+
+        if request.user.role == Role.OWNER or not chain.has_act(n):
+            raise PermissionDenied("Bu bosqich uchun dalolatnoma yo‘q.")
+        case = get_object_or_404(services.visible_cases(request.user).select_related("package"), pk=pk)
+        stage = get_object_or_404(case.stages.select_related("submitted_by", "decided_by"), number=n)
+        if stage.status != StageStatus.DONE:
+            return Response({"detail": "Bosqich hali tasdiqlanmagan."}, status=409)
+        response = HttpResponse(stage_act_pdf(case, stage), content_type="application/pdf")
+        response["Content-Disposition"] = f'inline; filename="dalolatnoma-{case.code}-{n}.pdf"'
+        return response
+
+
 class DashboardView(APIView):
     permission_classes = [role_required(Role.ADMIN, Role.DIRECTOR, Role.HR)]
 

@@ -119,3 +119,8 @@ def days_of(number: int) -> int:
 
 def growing_days() -> int:
     return days_of(GROWING_STAGE)
+
+
+def has_act(number: int) -> bool:
+    """Every finished stage gets its own act (dalolatnoma), except the owner's stage."""
+    return number in BY_NUMBER and number != OWNER_STAGE

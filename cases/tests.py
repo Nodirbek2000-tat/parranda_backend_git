@@ -465,6 +465,24 @@ class PdfAndDashboardTests(ChainHelpers):
         self.assertEqual(r["Content-Type"], "application/pdf")
         self.assertTrue(r.content.startswith(b"%PDF"))
 
+    def test_stage_act_pdf(self):
+        case_id = self.create_case()["id"]
+        self.advance_to(case_id, 5)  # stage 4 (builder) approved by admin
+        stages = {st["number"]: st for st in self.client_for(R.ADMIN).get(f"/api/cases/{case_id}").json()["stages"]}
+        self.assertTrue(stages[4]["has_act"])
+        self.assertTrue(stages[2]["has_act"])  # HR: no admin approval, the act still exists
+        self.assertFalse(stages[5]["has_act"])  # not approved yet
+        self.assertFalse(stages[9]["has_act"])  # the owner's stage never has one
+        for role in (R.ADMIN, R.BUILDER, R.SUPERADMIN):
+            r = self.client_for(role).get(f"/api/cases/{case_id}/stages/4/act")
+            self.assertEqual(r.status_code, 200, role)
+            self.assertEqual(r["Content-Type"], "application/pdf")
+            self.assertTrue(r.content.startswith(b"%PDF"))
+        self.assertEqual(self.client_for(R.ADMIN).get(f"/api/cases/{case_id}/stages/5/act").status_code, 409)
+        self.assertEqual(self.client_for(R.ADMIN).get(f"/api/cases/{case_id}/stages/2/act").status_code, 200)
+        self.assertEqual(self.client_for(R.ADMIN).get(f"/api/cases/{case_id}/stages/9/act").status_code, 403)
+        self.assertEqual(self.client_for(R.OWNER).get(f"/api/cases/{case_id}/stages/4/act").status_code, 403)
+
     def test_dashboard(self):
         case_id = self.create_case()["id"]
         self.create_case()

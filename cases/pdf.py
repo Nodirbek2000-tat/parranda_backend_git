@@ -22,11 +22,15 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Image, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from accounts.models import Role
+
 from . import stages as chain
 
 FONT, FONT_BOLD = "NNP", "NNP-Bold"
-PRIMARY = colors.HexColor("#12372A")
-GRID = colors.HexColor("#C9D1C5")
+PRIMARY = colors.HexColor("#0F3A6B")
+GRID = colors.HexColor("#C2CDDA")
+HEAD_BG = colors.HexColor("#E6F0FA")
+RED = colors.HexColor("#E3262B")
 FALLBACKS = {"ʻ": "‘", "ʼ": "’", "`": "‘", "´": "’", "№": "No", " ": " ", "−": "-", "✓": "+"}
 
 
@@ -186,5 +190,119 @@ def case_pdf(case) -> bytes:
 
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
                       bottomMargin=14 * mm, title=f"Dalolatnoma {case.code}").build(
+        story, onFirstPage=footer, onLaterPages=footer)
+    return buf.getvalue()
+
+
+def _name(user) -> str:
+    return user.full_name if user else "—"
+
+
+def stage_act_pdf(case, stage) -> bytes:
+    """Act (dalolatnoma) of one stage approved by an Administrator: what was done, by whom, and the joint
+    confirmation of the executor and the Administrator."""
+    _cmap()
+    d = chain.get(stage.number)
+    base = ParagraphStyle("base", fontName=FONT, fontSize=9.5, leading=13)
+    small = ParagraphStyle("small", parent=base, fontSize=8, leading=10, textColor=colors.HexColor("#5A697B"),
+                           alignment=1)
+    center = ParagraphStyle("center", parent=base, alignment=1)
+    right = ParagraphStyle("right", parent=base, alignment=2)
+    h1 = ParagraphStyle("h1", parent=base, fontName=FONT_BOLD, fontSize=16, leading=20, textColor=PRIMARY,
+                        alignment=1)
+    h2 = ParagraphStyle("h2", parent=base, fontName=FONT_BOLD, fontSize=11, leading=15, textColor=PRIMARY,
+                        spaceBefore=8, spaceAfter=4)
+
+    def p(text, style=base):
+        return Paragraph(text, style)
+
+    def boxed(rows):
+        table = Table(rows, colWidths=[40 * mm, 140 * mm])
+        table.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, GRID), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                   ("BACKGROUND", (0, 0), (0, -1), HEAD_BG)]))
+        return table
+
+    executor, admin = stage.submitted_by, stage.decided_by
+    number = f"{case.code}-{stage.number:02d}"
+    place = ", ".join(x for x in (case.region, case.district) if x) or "—"
+    closed_at = stage.decided_at or stage.submitted_at
+    approved_on = timezone.localtime(closed_at).strftime("%d.%m.%Y") if closed_at else "—"
+    admin_role = "Administrator (Super Admin)" if admin and admin.role == Role.SUPERADMIN else "Administrator"
+    executor_role = Role(d.executor).label
+    # stages 1-3 (and growing) have no Administrator approval in the chain: his line stays for a hand signature
+    admin_name = _name(admin) if admin else "____________________"
+
+    story = [
+        p(f"DALOLATNOMA {pdf_text('№')} {pdf_text(number)}", h1),
+        p(f"{stage.number}-bosqich: <b>{pdf_text(d.title)}</b>", center),
+        Spacer(1, 4 * mm),
+        Table([[p(pdf_text(place)), p(f"{approved_on} y.", right)]], colWidths=[90 * mm, 90 * mm]),
+        Spacer(1, 3 * mm),
+        p(f"Biz, quyida imzo qo‘yuvchilar — bajaruvchi ({pdf_text(executor_role)}) <b>{pdf_text(_name(executor))}</b> "
+          f"va {pdf_text(admin_role)} <b>{pdf_text(admin_name)}</b> — ushbu dalolatnomani {pdf_text(case.code)} "
+          f"raqamli xonadon bo‘yicha «{pdf_text(d.title)}» bosqichi ishlari bajarilgani to‘g‘risida tuzdik."),
+        p("Xonadon", h2),
+        boxed([[p(f"<b>{pdf_text(k)}</b>"), p(pdf_text(v) or "—")] for k, v in (
+            ("Xonadon", f"{case.code} — {case.name}"), ("Egasi", case.owner_full_name),
+            ("Telefon", case.owner_phone),
+            ("Manzil", ", ".join(x for x in (case.region, case.district, case.mfy, case.address) if x)),
+            ("Paket", case.package.name),
+        )]),
+        p("Bajarilgan ishlar", h2),
+    ]
+    rows = [[p(f"<b>{pdf_text(k)}</b>"), p(pdf_text(v))] for k, v in (
+        ("Bosqich", f"{stage.number}. {d.title}"),
+        ("Bajaruvchi", f"{_name(executor)} ({executor_role})"),
+        ("Bajarilgan vaqt", _dt(stage.submitted_at)),
+        ("Muddat", _dt(stage.due_at)),
+    )]
+    rows.append([p("<b>Ma’lumotlar</b>"), p(_data_lines(stage))])
+    returns = list(case.events.filter(stage_number=stage.number, action="return").select_related("actor"))
+    if returns:
+        rows.append([p("<b>Qaytarilgan</b>"), p("<br/>".join(
+            f"{_dt(e.created_at)} — {pdf_text(_name(e.actor))}: {pdf_text(e.note) or '—'}" for e in returns))])
+    story.append(boxed(rows))
+
+    thumbs = [_thumb(ph.image, 30 * mm) for ph in case.photos.filter(stage=stage.number)[:5]]
+    thumbs = [t for t in thumbs if t is not None]
+    if thumbs:
+        story += [p("Rasmlar", h2), Table([thumbs], hAlign="LEFT")]
+
+    story += [
+        Spacer(1, 5 * mm),
+        p(f"Yuqoridagi ishlar to‘liq bajarilganligi <b>bajaruvchi</b> va <b>{pdf_text(admin_role)}</b> tomonidan "
+          f"birgalikda tasdiqlandi." if admin else
+          f"Yuqoridagi ishlar to‘liq bajarilganligi <b>bajaruvchi</b> tomonidan tasdiqlandi va "
+          f"<b>{pdf_text(admin_role)}</b> imzosi bilan tasdiqlanadi."),
+        Spacer(1, 4 * mm),
+    ]
+    stamp = Table([
+        [p("<b>BIRGALIKDA TASDIQLANGAN</b>" if admin else "<b>BAJARUVCHI TOMONIDAN TASDIQLANGAN</b>",
+           ParagraphStyle("st", parent=center, textColor=PRIMARY, fontSize=11))],
+        [p(f"Bajaruvchi: <b>{pdf_text(_name(executor))}</b> · {_dt(stage.submitted_at)}", center)],
+        [p(f"{pdf_text(admin_role)}: <b>{pdf_text(admin_name)}</b>" + (f" · {_dt(stage.decided_at)}" if admin else ""),
+           center)],
+        [p("NNP tizimida elektron tasdiqlangan", small)],
+    ], colWidths=[125 * mm], hAlign="CENTER")
+    stamp.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 1.4, PRIMARY), ("LINEBELOW", (0, 0), (-1, 0), 0.8, RED),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    sign = Table([
+        [p(f"<b>Bajaruvchi</b><br/>{pdf_text(executor_role)}"), p(pdf_text(_name(executor))), p("_____________________")],
+        [p(f"<b>{pdf_text(admin_role)}</b>"), p(pdf_text(admin_name)), p("_____________________")],
+    ], colWidths=[55 * mm, 70 * mm, 55 * mm], rowHeights=11 * mm)
+    sign.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "BOTTOM")]))
+    story += [KeepTogether([stamp, Spacer(1, 4 * mm), p("Imzolar", h2), sign])]
+
+    def footer(canvas, doc):
+        canvas.setFont(FONT, 7)
+        canvas.setFillColor(colors.grey)
+        canvas.drawString(15 * mm, 8 * mm,
+                          safe_text(f"NNP — Dalolatnoma {number} · Sahifa {doc.page} · {_dt(timezone.now())}"))
+
+    buf = io.BytesIO()
+    SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
+                      bottomMargin=14 * mm, title=f"Dalolatnoma {number}").build(
         story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()
