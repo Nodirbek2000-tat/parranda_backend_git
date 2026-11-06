@@ -7,7 +7,7 @@ A stage is late when it was submitted after its due_at, or is still open past du
 
 import io
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from django.db.models import Count, Q
 from django.http import HttpResponse
@@ -168,6 +168,7 @@ def overview(params) -> dict:
         },
         "finance": fin,
         "geo": geo_report(params, now),
+        "dashboard": dashboard(cases_qs, now),
     }
 
 
@@ -184,6 +185,7 @@ def geo_report(params, now) -> dict:
             for name, lat, lng in geo.DISTRICTS}
     selected = geo.canonical(params.get("district") or "")
     points = []
+    mahallas: dict[tuple, dict] = {}
     for case in cases:
         name = geo.canonical(case.district)
         row = rows.setdefault(name or geo.OTHER, {
@@ -199,6 +201,11 @@ def geo_report(params, now) -> dict:
         row["birds"] += (s.get("birds") or 0) if running else 0
         row["cost"] += s.get("total_cost") or 0
         row["revenue"] += s.get("revenue") or 0 if case.status != CaseStatus.REJECTED else 0
+        mfy_name = " ".join((case.mfy or "").split()) or "—"
+        m = mahallas.setdefault((row["name"], mfy_name.lower()), {
+            "district": row["name"], "mfy": mfy_name, "green": 0, "yellow": 0, "red": 0, "total": 0})
+        m[toifa(case, current, now)] += 1
+        m["total"] += 1
         if case.latitude is None or case.longitude is None:
             continue
         if params.get("district") and name != selected:
@@ -211,7 +218,124 @@ def geo_report(params, now) -> dict:
             "stage_title": chain.get(case.current_stage).title, "is_overdue": overdue,
             "birds": s.get("birds"), "days_since_delivery": s.get("days_since_delivery"),
         })
-    return {"selected": selected, "districts": list(rows.values()), "points": points}
+    mfy_rows = sorted(mahallas.values(), key=lambda m: (m["district"], -m["total"], m["mfy"]))
+    return {"selected": selected, "districts": list(rows.values()), "points": points, "mahallas": mfy_rows}
+
+
+#: Toifa of a household: qizil = rejected or the current stage is overdue; sariq = needs attention (returned,
+#: deadline within a day, or waiting for approval more than a day); yashil = on track or finished.
+TOIFA_LABELS = {"green": "Yashil", "yellow": "Sariq", "red": "Qizil"}
+
+
+def toifa(case, current, now) -> str:
+    if case.status == CaseStatus.REJECTED:
+        return "red"
+    if case.status == CaseStatus.DONE or current is None:
+        return "green"
+    if current.is_overdue:
+        return "red"
+    if current.status == StageStatus.RETURNED:
+        return "yellow"
+    if current.status in OPEN and current.due_at is not None and current.due_at - now < timedelta(days=1):
+        return "yellow"
+    if current.status == StageStatus.SUBMITTED and current.submitted_at and now - current.submitted_at > timedelta(days=1):
+        return "yellow"
+    return "green"
+
+
+def _months_back(today, count):
+    """The first days of the last `count` months, oldest first (the current month last)."""
+    year, month, out = today.year, today.month, []
+    for _ in range(count):
+        out.append(date(year, month, 1))
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+    return out[::-1]
+
+
+def dashboard(cases_qs, now) -> dict:
+    """Numbers for the "Umumiy svod" page (district / date filters applied)."""
+    from .summary import summaries
+
+    cases = list(cases_qs.select_related("package").prefetch_related("stages"))
+    stats = summaries(cases)
+    today = timezone.localdate()
+    months = _months_back(today, 6)
+    monthly = {(m.year, m.month): {"month": m.isoformat()[:7], "created": 0, "delivered": 0, "growing_done": 0,
+                                   "done": 0} for m in months}
+
+    def bump(moment, key):
+        if moment is None:
+            return
+        day = timezone.localdate(moment)
+        row = monthly.get((day.year, day.month))
+        if row is not None:
+            row[key] += 1
+
+    kpi = {"total": 0, "new_this_month": 0, "in_progress": 0, "growing": 0, "birds_now": 0, "done": 0,
+           "overdue": 0, "total_cost": 0}
+    toifas = {"green": 0, "yellow": 0, "red": 0}
+    est_revenue = 0
+    growing_lengths = []
+    rows = []
+    for case in cases:
+        stages = {st.number: st for st in case.stages.all()}
+        current = stages.get(case.current_stage)
+        s = stats.get(case.pk) or {}
+        running = case.status == CaseStatus.IN_PROGRESS
+        kind = toifa(case, current, now)
+        toifas[kind] += 1
+        kpi["total"] += 1
+        kpi["new_this_month"] += timezone.localdate(case.created_at) >= today.replace(day=1)
+        kpi["in_progress"] += running
+        kpi["done"] += case.status == CaseStatus.DONE
+        kpi["overdue"] += bool(running and current is not None and current.is_overdue)
+        kpi["total_cost"] += s.get("total_cost") or 0
+        if running and case.current_stage == chain.GROWING_STAGE:
+            kpi["growing"] += 1
+        if running:
+            kpi["birds_now"] += s.get("birds") or 0
+            est_revenue += s.get("revenue") or 0
+        bump(case.created_at, "created")
+        delivery = stages.get(chain.DELIVERY_STAGE)
+        if delivery is not None and delivery.status == StageStatus.DONE and not (delivery.data or {}).get("carried_over"):
+            bump(delivery.decided_at or delivery.submitted_at, "delivered")
+        growing = stages.get(chain.GROWING_STAGE)
+        if growing is not None and growing.submitted_at:
+            bump(growing.submitted_at, "growing_done")
+            if growing.activated_at:
+                growing_lengths.append((growing.submitted_at - growing.activated_at).total_seconds() / 86400)
+        if case.status == CaseStatus.DONE:
+            bump(case.done_at, "done")
+        rows.append((case, current, s, kind))
+
+    latest = []
+    for case, current, s, kind in sorted(rows, key=lambda r: r[0].created_at, reverse=True)[:8]:
+        latest.append({
+            "id": case.pk, "code": case.code, "cycle": case.cycle, "owner_full_name": case.owner_full_name,
+            "mfy": case.mfy, "district": geo.canonical(case.district) or case.district,
+            "status": case.status, "status_display": case.get_status_display(),
+            "current_stage": case.current_stage, "stage_title": chain.get(case.current_stage).title,
+            "stage_status": current.status if current else None,
+            "stage_overdue": bool(case.status == CaseStatus.IN_PROGRESS and current and current.is_overdue),
+            "birds": s.get("birds"), "days_since_delivery": s.get("days_since_delivery"),
+            "growing_days": s.get("growing_days"), "feed": s.get("feed") or [], "vet_visits": s.get("vet_visits") or 0,
+            "total_cost": s.get("total_cost") or 0, "revenue": s.get("revenue"), "profit": s.get("profit"),
+            "revenue_is_estimate": s.get("revenue_is_estimate", True),
+            "toifa": kind, "toifa_display": TOIFA_LABELS[kind],
+        })
+
+    return {
+        "kpi": kpi,
+        "toifa": [{"key": key, "label": TOIFA_LABELS[key], "count": toifas[key]} for key in ("green", "yellow", "red")],
+        "monthly": list(monthly.values()),
+        "finance_extra": {
+            "estimated_revenue_in_progress": est_revenue,
+            "avg_growing_days": round(sum(growing_lengths) / len(growing_lengths), 1) if growing_lengths else None,
+        },
+        "latest": latest,
+    }
 
 
 def cases_report(params) -> list[dict]:
@@ -382,6 +506,10 @@ def overview_sheets(d):
         ("So‘rovlar", ["Holat", "Soni"], requests),
         ("Tumanlar", ["Tuman / shahar", "Jami", "Jarayonda", "Yakunlangan", "Rad etilgan", "Muddati o‘tgan",
                       "Parranda (hozir)", "Xarajat", "Daromad"], districts),
+        ("Mahallalar", ["Tuman / shahar", "Mahalla", "Qizil", "Sariq", "Yashil", "Jami"],
+         [[m["district"], m["mfy"], m["red"], m["yellow"], m["green"], m["total"]] for m in d["geo"]["mahallas"]]),
+        ("Oylar", ["Oy", "Yangi xonadon", "Jo‘ja yetkazildi", "Parvarish tugadi", "Yakunlandi"],
+         [[r["month"], r["created"], r["delivered"], r["growing_done"], r["done"]] for r in d["dashboard"]["monthly"]]),
     ]
 
 

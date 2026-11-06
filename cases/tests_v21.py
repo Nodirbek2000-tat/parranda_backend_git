@@ -666,3 +666,31 @@ class GeoReportTests(GrowingHelpers):
         self.assertEqual({x["name"]: x["total"] for x in r["geo"]["districts"]}["Bulung‘ur tumani"], 1)
         # the household list uses the same matching
         self.assertEqual([c["id"] for c in admin.get("/api/cases", {"district": "Bulung‘ur tumani"}).json()], [b])
+
+    def test_dashboard_block(self):
+        from datetime import timedelta as td
+
+        a = self.create_case(district="Urgut", mfy="Bog‘bon")["id"]
+        b = self.create_case(district="Urgut", mfy="Bog‘bon")["id"]
+        c = self.create_case(district="Jomboy", mfy="Navro‘z")["id"]
+        # b: overdue -> qizil; c: rejected -> qizil; a: on track -> yashil
+        CaseStage.objects.filter(case_id=b, number=2).update(due_at=timezone.now() - td(hours=2))
+        self.client_for(R.ADMIN).post(f"/api/cases/{c}/reject", {"reason": "x"}, format="json")
+        d = self.client_for(R.ADMIN).get("/api/reports/overview").json()
+        dash = d["dashboard"]
+        self.assertEqual(dash["kpi"]["total"], 3)
+        self.assertEqual(dash["kpi"]["new_this_month"], 3)
+        self.assertEqual(dash["kpi"]["overdue"], 1)
+        self.assertEqual({t["key"]: t["count"] for t in dash["toifa"]}, {"green": 1, "yellow": 0, "red": 2})
+        self.assertEqual(len(dash["monthly"]), 6)
+        self.assertEqual(dash["monthly"][-1]["created"], 3)
+        self.assertEqual({r["id"] for r in dash["latest"]}, {a, b, c})
+        self.assertIn(dash["latest"][0]["toifa"], ("green", "yellow", "red"))
+        m = {(x["district"], x["mfy"]): x for x in d["geo"]["mahallas"]}
+        self.assertEqual((m[("Urgut tumani", "Bog‘bon")]["green"], m[("Urgut tumani", "Bog‘bon")]["red"]), (1, 1))
+        self.assertEqual(m[("Jomboy tumani", "Navro‘z")]["red"], 1)
+        # the district filter narrows the dashboard
+        urgut = self.client_for(R.ADMIN).get("/api/reports/overview", {"district": "Urgut tumani"}).json()["dashboard"]
+        self.assertEqual(urgut["kpi"]["total"], 2)
+        r = self.client_for(R.ADMIN).get("/api/reports/overview?format=xlsx")
+        self.assertEqual(r.status_code, 200)
