@@ -2,24 +2,25 @@
 matching of a free-text `Case.district` to one of them ("Urgut", "urgut tumani", "Bulungʻur" -> the canonical name).
 """
 
-#: (canonical name, latitude, longitude) — the centre is approximate: it places the district label on the map.
+#: (canonical name, latitude, longitude): a point well inside the district (from the geoBoundaries outline,
+#: see parranda_next/lib/geo/samarqand-tumanlar.json) — the label / bubble position on the report map.
 DISTRICTS: tuple[tuple[str, float, float], ...] = (
-    ("Samarqand shahri", 39.654, 66.960),
-    ("Kattaqo‘rg‘on shahri", 39.899, 66.257),
-    ("Bulung‘ur tumani", 39.770, 67.270),
-    ("Ishtixon tumani", 39.970, 66.490),
-    ("Jomboy tumani", 39.700, 67.090),
-    ("Kattaqo‘rg‘on tumani", 39.800, 66.100),
-    ("Qo‘shrabot tumani", 40.270, 66.680),
-    ("Narpay tumani", 39.930, 65.850),
-    ("Nurobod tumani", 39.550, 66.280),
-    ("Oqdaryo tumani", 39.860, 66.750),
-    ("Pastdarg‘om tumani", 39.700, 66.620),
-    ("Paxtachi tumani", 40.080, 65.650),
-    ("Payariq tumani", 40.030, 66.920),
-    ("Samarqand tumani", 39.570, 66.860),
-    ("Toyloq tumani", 39.580, 67.180),
-    ("Urgut tumani", 39.400, 67.250),
+    ("Samarqand shahri", 39.6180, 66.9762),
+    ("Kattaqo‘rg‘on shahri", 39.8544, 66.2790),
+    ("Bulung‘ur tumani", 39.7754, 67.3481),
+    ("Ishtixon tumani", 39.9365, 66.5238),
+    ("Jomboy tumani", 39.7522, 67.0948),
+    ("Kattaqo‘rg‘on tumani", 40.1402, 66.2975),
+    ("Qo‘shrabot tumani", 40.3905, 66.4667),
+    ("Narpay tumani", 39.8788, 65.8875),
+    ("Nurobod tumani", 39.6525, 65.8691),
+    ("Oqdaryo tumani", 39.8200, 66.7156),
+    ("Pastdarg‘om tumani", 39.6550, 66.6778),
+    ("Paxtachi tumani", 39.8730, 65.6119),
+    ("Payariq tumani", 39.9282, 66.8932),
+    ("Samarqand tumani", 39.5309, 66.9443),
+    ("Toyloq tumani", 39.5107, 67.2209),
+    ("Urgut tumani", 39.3842, 67.3246),
 )
 OTHER = "Boshqa / ko‘rsatilmagan"
 
