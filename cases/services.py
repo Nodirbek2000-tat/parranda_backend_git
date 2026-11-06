@@ -47,7 +47,9 @@ def visible_cases(user: User):
 
 
 def can_execute(user: User, case: Case, number: int) -> bool:
-    if user.role == Role.SUPERADMIN:
+    # Administrator / Super Admin may complete any stage on behalf of its executor
+    # (e.g. confirm the HR or Director step when testing alone, or when a person is absent).
+    if user.role in (Role.SUPERADMIN, Role.ADMIN):
         return True
     if number == 1:
         return user.role in (Role.INSPECTOR, Role.ADMIN)

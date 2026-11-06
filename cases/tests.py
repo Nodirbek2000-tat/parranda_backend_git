@@ -472,3 +472,15 @@ class DeleteTests(ChainHelpers):
         self.assertEqual(response.status_code, 409)
         self.assertIn("XN-", response.json()["detail"])
         self.assertEqual(self.client_for(R.WAREHOUSE).delete(f"/api/packages/{self.package.pk}").status_code, 403)
+
+
+class AdminActsForAnyStageTests(ChainHelpers):
+    def test_admin_can_confirm_hr_and_director_stages(self):
+        cid = self.create_case()["id"]
+        detail = self.client_for(R.ADMIN).get(f"/api/cases/{cid}").json()
+        self.assertTrue(detail["can"]["submit"])  # HR stage, acted on by the Administrator
+        self.submit(R.ADMIN, cid, 2)
+        self.submit(R.ADMIN, cid, 3)
+        self.assertEqual(Case.objects.get(pk=cid).current_stage, 4)
+        # Other roles still cannot touch a stage that is not theirs.
+        self.submit(R.WAREHOUSE, cid, 4, photo=True, expect=403)
