@@ -11,8 +11,8 @@ from accounts.models import User
 from accounts.serializers import user_json
 from audit.models import log
 from cases import stages as chain
-from cases.models import CaseStage
-from cases.services import my_stages_q
+from cases.models import CaseStage, VisitStatus
+from cases.services import in_growing_period, my_stages_q
 
 from . import services
 from .models import Notification
@@ -105,16 +105,58 @@ class BotTasksView(BotView):
         user = _linked_user(telegram_id)
         stages = (CaseStage.objects.filter(my_stages_q(user)).select_related("case")
                   .order_by("due_at", "case_id")[:50])
-        return Response([
+        items = [
             {
-                "id": st.case_id, "code": st.case.code, "name": st.case.name,
+                "kind": "case", "id": st.case_id, "code": st.case.code, "name": st.case.name,
+                "title": f"{st.number}. {chain.get(st.number).title}",
                 "stage_number": st.number, "stage_title": chain.get(st.number).title,
                 "stage_status": st.status, "stage_status_display": st.get_status_display(),
                 "action": "approve" if st.status == "SUBMITTED" else "submit",
-                "due_at": st.due_at, "is_overdue": st.is_overdue,
+                "due_at": st.due_at, "is_overdue": st.is_overdue, "path": f"/cases/{st.case_id}",
             }
             for st in stages
-        ])
+        ]
+        return Response(items + _request_tasks(user) + _visit_tasks(user))
+
+
+def _request_tasks(user) -> list[dict]:
+    from cases.growing import request_can, visible_requests
+    from cases.models import RequestStatus
+
+    open_statuses = (RequestStatus.PENDING_LOGISTICS, RequestStatus.PENDING_ADMIN, RequestStatus.APPROVED,
+                     RequestStatus.DELIVERED)
+    rows = visible_requests(user).filter(status__in=open_statuses).select_related("case").order_by("id")[:50]
+    items, growing = [], {}
+    for req in rows:
+        if req.case_id not in growing:
+            growing[req.case_id] = in_growing_period(req.case)
+        can = request_can(user, req, growing=growing[req.case_id])
+        action = next((name for name in ("deliver", "confirm", "approve") if can[name]), None)
+        if action is None:
+            continue
+        items.append({
+            "kind": "request", "id": req.pk, "case_id": req.case_id, "code": req.case.code, "name": req.case.name,
+            "title": f"{req.get_kind_display()} so‘rovi #{req.pk}", "status": req.status,
+            "status_display": req.get_status_display(), "action": action, "due_at": None, "is_overdue": False,
+            "path": f"/requests/{req.pk}",
+        })
+    return items
+
+
+def _visit_tasks(user) -> list[dict]:
+    from cases.models import VetVisit
+
+    rows = (VetVisit.objects.filter(vet=user, status=VisitStatus.PLANNED, case__deleted_at__isnull=True)
+            .select_related("case").order_by("planned_date", "id")[:50])
+    return [
+        {
+            "kind": "visit", "id": v.pk, "case_id": v.case_id, "code": v.case.code, "name": v.case.name,
+            "title": f"Veterinar tashrifi: {v.get_kind_display()}" + (f" ({v.week}-hafta)" if v.week else ""),
+            "status": v.status, "status_display": v.get_status_display(), "planned_date": v.planned_date,
+            "due_at": None, "is_overdue": v.is_overdue, "path": f"/visits/{v.pk}",
+        }
+        for v in rows
+    ]
 
 
 class BotPendingView(BotView):

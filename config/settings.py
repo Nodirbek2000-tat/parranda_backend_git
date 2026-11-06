@@ -145,6 +145,10 @@ SIMPLE_JWT = {
 REPORT_FONT_PATH: str = env.str("REPORT_FONT_PATH", "")
 REPORT_FONT_BOLD_PATH: str = env.str("REPORT_FONT_BOLD_PATH", "")
 
+# v2.1: growing period (stage 10) length in days, and the DEMO price of one chick (so‘m) for the finance block.
+GROWING_DAYS: int = env.int("GROWING_DAYS", 45)
+CHICK_PRICE: int = env.int("CHICK_PRICE", 8000)
+
 LOG_LEVEL: str = env.str("LOG_LEVEL", "INFO").upper()
 LOGGING = {
     "version": 1,

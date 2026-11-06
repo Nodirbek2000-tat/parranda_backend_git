@@ -17,6 +17,7 @@ class Role(models.TextChoices):
     VET = "VET", "Veterinar"
     OWNER = "OWNER", "Xonadon egasi"
     ACCOUNTANT = "ACCOUNTANT", "Buxgalter"
+    SLAUGHTERHOUSE = "SLAUGHTERHOUSE", "Qushxona"
 
 
 class ActiveUserManager(UserManager):

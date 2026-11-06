@@ -52,12 +52,16 @@ class StockMove(models.Model):
     IN = "IN"
     OUT = "OUT"
     TYPES = [(IN, "Kirim"), (OUT, "Chiqim")]
+    PACKAGE, REQUEST, VISIT = "package", "request", "visit"
+    PURPOSES = [(PACKAGE, "Paket (5-bosqich)"), (REQUEST, "Yem so‘rovi"), (VISIT, "Veterinar tashrifi")]
 
     product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="moves")
     type = models.CharField(max_length=3, choices=TYPES)
     qty = models.DecimalField(max_digits=14, decimal_places=3)
     balance_after = models.DecimalField(max_digits=14, decimal_places=3)
     case = models.ForeignKey("cases.Case", null=True, blank=True, on_delete=models.PROTECT, related_name="stock_moves")
+    #: why a case-linked move happened; finance must not count the stage-5 package twice
+    purpose = models.CharField(max_length=10, choices=PURPOSES, blank=True, default="")
     note = models.CharField(max_length=500, blank=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     created_at = models.DateTimeField(auto_now_add=True)

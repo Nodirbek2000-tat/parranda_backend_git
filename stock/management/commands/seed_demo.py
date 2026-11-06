@@ -41,7 +41,7 @@ ACCOUNTS = [
     (Role.SUPERADMIN, "superadmin"), (Role.ADMIN, "admin"), (Role.INSPECTOR, "inspector"), (Role.HR, "hr"),
     (Role.DIRECTOR, "director"), (Role.BUILDER, "builder"), (Role.WAREHOUSE, "warehouse"),
     (Role.INCUBATOR, "incubator"), (Role.LOGISTICS, "logistics"), (Role.VET, "vet"), (Role.OWNER, "owner"),
-    (Role.ACCOUNTANT, "accountant"),
+    (Role.ACCOUNTANT, "accountant"), (Role.SLAUGHTERHOUSE, "slaughterhouse"),
 ]
 
 

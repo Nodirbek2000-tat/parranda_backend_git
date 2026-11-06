@@ -5,7 +5,7 @@ and queues the Telegram notifications (on commit).
 """
 
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db import transaction
 from django.db.models import Q
@@ -78,10 +78,27 @@ def can_flags(user: User, case: Case, stage: CaseStage) -> dict:
         flags["submit"] = stage.status in OPEN and executor
         flags["approve"] = stage.status == StageStatus.SUBMITTED and approver
         flags["return"] = (stage.status == StageStatus.SUBMITTED and approver) or (
-            stage.status == StageStatus.ACTIVE and not has_approver and n > 1 and executor)
+            stage.status == StageStatus.ACTIVE and _can_send_back(n) and executor)
         flags["reject"] = can_reject(user, case, stage)
     flags["owner_account"] = user.is_admin
+    flags["assign_vet"] = user.is_admin
+    flags["create_request"] = flags["request"] = (
+        user.role == Role.OWNER and case.owner_user_id == user.pk and in_growing_period(case, stage))
     return flags
+
+
+def _can_send_back(number: int) -> bool:
+    """An ACTIVE stage without an approver may send the previous stage back (HR, Director); not growing."""
+    return chain.get(number).approver is None and 1 < number and number != chain.GROWING_STAGE
+
+
+def in_growing_period(case: Case, stage: CaseStage | None = None) -> bool:
+    """The case is in the growing period: stage 10 is ACTIVE (requests and weekly visits happen then)."""
+    if case.status != CaseStatus.IN_PROGRESS or case.current_stage != chain.GROWING_STAGE:
+        return False
+    if stage is None or stage.number != chain.GROWING_STAGE:
+        stage = case.stages.get(number=chain.GROWING_STAGE)
+    return stage.status == StageStatus.ACTIVE
 
 
 def my_stages_q(user: User) -> Q:
@@ -100,7 +117,7 @@ def my_stages_q(user: User) -> Q:
     approvals = [s.number for s in chain.STAGES if s.approver == role]
     if approvals:
         q |= Q(status=StageStatus.SUBMITTED, number__in=approvals)
-    return Q(case__status=CaseStatus.IN_PROGRESS) & q
+    return Q(case__status=CaseStatus.IN_PROGRESS, case__deleted_at__isnull=True) & q
 
 
 def my_cases(user: User):
@@ -150,7 +167,7 @@ def _event(case: Case, number: int, action: str, user: User, note: str = "", **a
 def _open(stage: CaseStage, status: str, now) -> None:
     stage.status = status
     stage.activated_at = now
-    stage.due_at = now + timedelta(days=chain.get(stage.number).days)
+    stage.due_at = now + timedelta(days=chain.days_of(stage.number))
     stage.overdue_notified_on = None
 
 
@@ -163,6 +180,10 @@ def _activate_next(case: Case, number: int, user: User, now, event: StageEvent) 
         users = _role_users(Role.SUPERADMIN, Role.ADMIN) + ([case.owner_user] if case.owner_user else [])
         _notify("done", users, case, case.stages.get(number=number), f"ev{event.pk}:done")
         return
+    if number == chain.GROWING_STAGE:  # sent to the slaughterhouse: routine visits are no longer needed
+        from .growing import cancel_routine_visits
+
+        cancel_routine_visits(case, user, now)
     nxt = case.stages.get(number=number + 1)
     _open(nxt, StageStatus.ACTIVE, now)
     nxt.save()
@@ -207,6 +228,20 @@ def _clean_data(stage_def: chain.Stage, data: dict) -> dict:
             if f.min_value is not None and value < f.min_value:
                 errors[f.name] = [f"Qiymat {f.min_value} dan kichik bo‘lmasligi kerak."]
                 continue
+        elif f.kind == "decimal":
+            try:
+                value = Decimal(str(value).replace(",", ".")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            except (InvalidOperation, ValueError):
+                errors[f.name] = ["Son kiriting (masalan 245.50)."]
+                continue
+            if not value.is_finite() or value > Decimal("1e9"):
+                errors[f.name] = ["Son kiriting (masalan 245.50)."]
+                continue
+            if f.min_value is not None and (value <= f.min_value if f.exclusive_min else value < f.min_value):
+                errors[f.name] = [f"Qiymat {f.min_value} dan katta bo‘lishi kerak." if f.exclusive_min
+                                  else f"Qiymat {f.min_value} dan kichik bo‘lmasligi kerak."]
+                continue
+            value = float(value)  # JSON number, 2 dp
         elif f.kind == "choice":
             if value not in {c[0] for c in f.choices}:
                 errors[f.name] = [f"“{value}” ruxsat etilgan qiymat emas."]
@@ -217,6 +252,37 @@ def _clean_data(stage_def: chain.Stage, data: dict) -> dict:
     if errors:
         raise ChainError("Ma’lumotlar noto‘g‘ri.", 400, errors=errors)
     return clean
+
+
+def _stage_data(case: Case, number: int) -> dict:
+    stage = case.stages.filter(number=number).first()
+    return (stage.data or {}) if stage else {}
+
+
+def _cross_check(case: Case, number: int, clean: dict) -> None:
+    """Rules between stages (v2.1). Older cases without the source field are not checked."""
+    if number == chain.DELIVERY_STAGE:
+        given = _stage_data(case, chain.INCUBATION_STAGE).get("chicks_count")
+        if isinstance(given, int) and clean["delivered_healthy"] + clean["died_in_transit"] > given:
+            msg = f"Sog‘lom va nobud bo‘lganlar jami berilgan jo‘jalar sonidan ({given}) oshmasligi kerak."
+            raise ChainError("Ma’lumotlar noto‘g‘ri.", 400,
+                             errors={"delivered_healthy": [msg], "died_in_transit": [msg]})
+    elif number == chain.OWNER_STAGE:
+        delivered = _stage_data(case, chain.DELIVERY_STAGE).get("delivered_healthy")
+        if isinstance(delivered, int) and clean["received_count"] > delivered:
+            raise ChainError("Ma’lumotlar noto‘g‘ri.", 400, errors={"received_count": [
+                f"Qabul qilinganlar yetkazilgan sog‘lom jo‘jalar sonidan ({delivered}) oshmasligi kerak."]})
+    elif number == chain.ACCOUNTING_STAGE:
+        if clean.get("revenue") is None:
+            if clean.get("price_per_kg") is None:
+                raise ChainError("Ma’lumotlar noto‘g‘ri.", 400, errors={"revenue": [
+                    "Sotuv summasini yoki 1 kg narxini kiriting."]})
+            kg = _stage_data(case, chain.SLAUGHTER_STAGE).get("total_kg")
+            if not kg:
+                raise ChainError("Ma’lumotlar noto‘g‘ri.", 400, errors={"revenue": [
+                    "12-bosqichda vazn yo‘q: sotuv summasini kiriting."]})
+            clean["revenue"] = int((Decimal(clean["price_per_kg"]) * Decimal(str(kg))).quantize(
+                Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def _check_photos(case: Case, stage_def: chain.Stage) -> None:
@@ -269,6 +335,7 @@ def submit(user: User, case_id: int, number: int, *, data: dict, note: str = "",
         raise ChainError(MSG_FORBIDDEN, 403)
     stage = _current(case, number, OPEN)
     clean = _clean_data(stage_def, data)
+    _cross_check(case, number, clean)
     _attach(Photo, photo_ids, user, case, number)
     _attach(Document, document_ids, user, case, number)
     _check_photos(case, stage_def)
@@ -285,6 +352,12 @@ def submit(user: User, case_id: int, number: int, *, data: dict, note: str = "",
             stock.issue_package(case, user=user)
         except stock.StockShortage as exc:
             raise ChainError("Omborda yetarli mahsulot yo‘q.", 409, missing=exc.missing) from None
+
+    if number == chain.ACCOUNTING_STAGE:  # final finance snapshot (v2.1 §6)
+        from .finance import finance
+
+        clean["finance"] = finance(case, revenue=clean["revenue"], price_per_kg=clean.get("price_per_kg"),
+                                   final=True)
 
     now = timezone.now()
     stage.data, stage.note = clean, note or ""
@@ -338,7 +411,7 @@ def return_stage(user: User, case_id: int, number: int, *, reason: str) -> Case:
     else:  # ACTIVE stage without an approver sends the previous stage back (HR -> inspection)
         if not can_execute(user, case, number):
             raise ChainError(MSG_FORBIDDEN, 403)
-        if stage_def.approver is not None or number == 1:
+        if not _can_send_back(number):
             raise ChainError("Bu bosqichdan ortga qaytarib bo‘lmaydi.", 409)
         stage.status, stage.activated_at, stage.due_at = StageStatus.WAITING, None, None
         stage.save()
@@ -426,7 +499,8 @@ def send_overdue_reminders(now=None) -> int:
     now = now or timezone.now()
     today = timezone.localdate(now)
     overdue = (
-        CaseStage.objects.filter(status__in=OPEN, case__status=CaseStatus.IN_PROGRESS, due_at__lt=now)
+        CaseStage.objects.filter(status__in=OPEN, case__status=CaseStatus.IN_PROGRESS, case__deleted_at__isnull=True,
+                                 due_at__lt=now)
         .exclude(overdue_notified_on=today)
         .select_related("case", "case__owner_user")
     )

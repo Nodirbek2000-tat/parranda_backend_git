@@ -16,6 +16,16 @@ from .models import Package, PackageItem, Product, StockMove
 from .serializers import PackageSerializer, ProductSerializer, StockInSerializer, move_json, package_json, product_json
 
 IsStockRole = role_required(Role.WAREHOUSE, Role.ADMIN)
+_ProductReaders = role_required(Role.WAREHOUSE, Role.ADMIN, Role.LOGISTICS, Role.VET)
+
+
+class CanReadProducts(_ProductReaders):
+    """GET: also LOGISTICS (feed picker) and VET (drug picker); writes stay WAREHOUSE/ADMIN."""
+
+    def has_permission(self, request, view):
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return super().has_permission(request, view)
+        return IsStockRole().has_permission(request, view)
 
 
 def _limit(request, default=200, maximum=1000):
@@ -26,7 +36,7 @@ def _limit(request, default=200, maximum=1000):
 
 
 class ProductListView(APIView):
-    permission_classes = [IsStockRole]
+    permission_classes = [CanReadProducts]
 
     def get(self, request):
         qs = Product.objects.all()

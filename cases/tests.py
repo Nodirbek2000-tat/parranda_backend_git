@@ -28,11 +28,17 @@ class ChainHelpers(NNPTestCase):
             5: lambda: (self.submit(R.WAREHOUSE, case_id, 5), self.act(R.ADMIN, case_id, 5, "approve")),
             6: lambda: (self.submit(R.INCUBATOR, case_id, 6, {"chicks_count": 100}, photo=True),
                         self.act(R.ADMIN, case_id, 6, "approve")),
-            7: lambda: (self.submit(R.LOGISTICS, case_id, 7, photo=True), self.act(R.ADMIN, case_id, 7, "approve")),
+            7: lambda: (self.submit(R.LOGISTICS, case_id, 7, {"delivered_healthy": 99, "died_in_transit": 1},
+                                    photo=True), self.act(R.ADMIN, case_id, 7, "approve")),
             8: lambda: (self.submit(R.VET, case_id, 8, {"health": "good"}, photo=True),
                         self.act(R.ADMIN, case_id, 8, "approve")),
             9: lambda: (self.link_owner(case_id), self.submit(R.OWNER, case_id, 9, {"received_count": 98}, photo=True),
                         self.act(R.ADMIN, case_id, 9, "approve")),
+            10: lambda: self.submit(R.ADMIN, case_id, 10),
+            11: lambda: (self.submit(R.LOGISTICS, case_id, 11, {"picked_up_count": 95}, photo=True),
+                         self.act(R.ADMIN, case_id, 11, "approve")),
+            12: lambda: (self.submit(R.SLAUGHTERHOUSE, case_id, 12, {"received_count": 95, "total_kg": "237.5"}),
+                         self.act(R.ADMIN, case_id, 12, "approve")),
         }
         for n in range(2, target):
             steps[n]()
@@ -55,7 +61,7 @@ class CreateCaseTests(ChainHelpers):
         self.assertEqual(self.stage(detail, 2)["status"], "ACTIVE")
         self.assertIsNotNone(self.stage(detail, 2)["due_at"])
         self.assertTrue(all(s["status"] == "WAITING" for s in detail["stages"][2:]))
-        self.assertEqual(len(detail["stages"]), 10)
+        self.assertEqual(len(detail["stages"]), 13)
         self.assertEqual([e["action"] for e in detail["events"]], ["create", "submit"])
         self.assertEqual(len(self.stage(detail, 1)["photos"]), 1)
         self.assertAlmostEqual(detail["latitude"], 40.998878, places=6)
@@ -101,23 +107,52 @@ class FullChainTests(ChainHelpers):
 
         self.submit(R.INCUBATOR, case_id, 6, {"chicks_count": "100"}, photo=True)
         self.act(R.ADMIN, case_id, 6, "approve")
-        self.submit(R.LOGISTICS, case_id, 7, photo=True)
+        self.submit(R.LOGISTICS, case_id, 7, {"delivered_healthy": 97, "died_in_transit": 3}, photo=True)
         self.act(R.ADMIN, case_id, 7, "approve")
         self.submit(R.VET, case_id, 8, {"health": "normal"}, photo=True)
         self.act(R.ADMIN, case_id, 8, "approve")
         d = self.submit(owner_user, case_id, 9, {"received_count": 97}, photo=True)
         self.assertEqual(self.stage(d, 9)["data"], {"received_count": 97})
-        self.act(R.ADMIN, case_id, 9, "approve")
-        self.submit(R.ACCOUNTANT, case_id, 10, {"financing_type": "Grant", "amount": 12000000, "contract_no": "N-1"})
-        self.act(R.ADMIN, case_id, 10, "approve", expect=403)  # stage 10 approver is SUPERADMIN
-        d = self.act(R.SUPERADMIN, case_id, 10, "approve")
+        d = self.act(R.ADMIN, case_id, 9, "approve")
+        # stage 10: growing, ADMIN's own stage ("Qushxonaga yuborish"), GROWING_DAYS long, no approver
+        st10 = self.stage(d, 10)
+        self.assertEqual((st10["status"], st10["executor_role"], st10["approver_role"], st10["days"]),
+                         ("ACTIVE", "ADMIN", None, 45))
+        self.assertEqual(d["growing"]["total_days"], 45)
+        self.assertEqual(d["growing"]["day"], 1)
+        self.submit(R.SUPERADMIN, case_id, 10, expect=403)
+        self.submit(R.LOGISTICS, case_id, 10, expect=403)
+        self.act(R.ADMIN, case_id, 10, "return", {"reason": "x"}, expect=409)  # growing cannot send stage 9 back
+        d = self.submit(R.ADMIN, case_id, 10)
+        self.assertEqual((self.stage(d, 10)["status"], d["current_stage"]), ("DONE", 11))
+        self.assertIsNone(d["growing"])
+        self.submit(R.LOGISTICS, case_id, 11, {"picked_up_count": 96}, photo=True)
+        self.act(R.ADMIN, case_id, 11, "approve")
+        self.submit(R.LOGISTICS, case_id, 12, {"received_count": 96, "total_kg": 240}, expect=403)
+        d = self.submit(R.SLAUGHTERHOUSE, case_id, 12, {"received_count": 96, "total_kg": "240.456"})
+        self.assertEqual(self.stage(d, 12)["data"], {"received_count": 96, "total_kg": 240.46})
+        self.act(R.ADMIN, case_id, 12, "approve")
+        self.submit(R.ACCOUNTANT, case_id, 13, {"financing_type": "grant", "contract_no": "N-1"}, expect=400)
+        d = self.submit(R.ACCOUNTANT, case_id, 13, {"financing_type": "grant", "contract_no": "N-1",
+                                                    "price_per_kg": 25000})
+        data13 = self.stage(d, 13)["data"]
+        self.assertEqual(data13["revenue"], 6011500)  # 25 000 × 240.46
+        fin = data13["finance"]
+        # package price 1000 + 100 chicks × 8000 DEMO; stage-5 package items are informational only
+        self.assertEqual((fin["package_cost"], fin["chicks_cost"], fin["feed_cost"], fin["vet_cost"],
+                          fin["other_cost"], fin["total_cost"]), (1000, 800000, 0, 0, 0, 801000))
+        self.assertEqual((fin["revenue"], fin["profit"], fin["is_final"]), (6011500, 5210500, True))
+        self.act(R.ADMIN, case_id, 13, "approve", expect=403)  # stage 13 approver is SUPERADMIN
+        d = self.act(R.SUPERADMIN, case_id, 13, "approve")
         self.assertEqual(d["status"], "DONE")
         self.assertIsNotNone(d["done_at"])
         self.assertTrue(all(s["status"] == "DONE" for s in d["stages"]))
-        self.assertEqual(StageEvent.objects.filter(case_id=case_id).count(), 2 + 2 + 7 * 2)
+        # 1: create+submit; 2,3,10: submit; 4-9, 11-13: submit+approve
+        self.assertEqual(StageEvent.objects.filter(case_id=case_id).count(), 2 + 3 + 9 * 2)
         self.assertFalse(any(d["can"][k] for k in ("submit", "approve", "return", "reject")))
+        self.assertEqual(d["finance"]["profit"], 5210500)
         # finished case refuses actions
-        self.act(R.SUPERADMIN, case_id, 10, "approve", expect=409)
+        self.act(R.SUPERADMIN, case_id, 13, "approve", expect=409)
 
     def test_wrong_role_is_403(self):
         case_id = self.create_case()["id"]
@@ -162,7 +197,7 @@ class FullChainTests(ChainHelpers):
         self.submit(R.INCUBATOR, case_id, 6, {"chicks_count": 0}, photo=True, expect=400)
         self.submit(R.INCUBATOR, case_id, 6, {"chicks_count": 50}, photo=True)
         self.act(R.ADMIN, case_id, 6, "approve")
-        self.submit(R.LOGISTICS, case_id, 7, photo=True)
+        self.submit(R.LOGISTICS, case_id, 7, {"delivered_healthy": 50, "died_in_transit": 0}, photo=True)
         self.act(R.ADMIN, case_id, 7, "approve")
         d = self.submit(R.VET, case_id, 8, {"health": "excellent"}, photo=True, expect=400)
         self.assertIn("health", d["errors"])

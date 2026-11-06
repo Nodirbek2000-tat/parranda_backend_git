@@ -4,6 +4,8 @@ from django.urls import path
 from accounts import views as acc
 from audit.views import AuditListView
 from cases import files
+from cases import growing_views as grow
+from cases import reports
 from cases import views as cases
 from notify import views as notify
 from stock import views as stock
@@ -36,7 +38,24 @@ urlpatterns = [
     path("api/cases/<int:pk>/reject", cases.RejectView.as_view()),
     path("api/cases/<int:pk>/owner-account", cases.OwnerAccountView.as_view()),
     path("api/cases/<int:pk>/pdf", cases.CasePdfView.as_view()),
+    path("api/cases/<int:pk>/assign-vet", grow.AssignVetView.as_view()),
+    path("api/cases/<int:pk>/requests", grow.CaseRequestCreateView.as_view()),
     path("api/dashboard", cases.DashboardView.as_view()),
+    # v2.1: owner requests, vet visits, reports
+    path("api/requests", grow.RequestListView.as_view()),
+    path("api/requests/<int:pk>", grow.RequestDetailView.as_view()),
+    path("api/requests/<int:pk>/approve", grow.RequestActionView.as_view(action="approve")),
+    path("api/requests/<int:pk>/reject", grow.RequestActionView.as_view(action="reject")),
+    path("api/requests/<int:pk>/deliver", grow.RequestActionView.as_view(action="deliver")),
+    path("api/requests/<int:pk>/confirm", grow.RequestActionView.as_view(action="confirm")),
+    path("api/visits", grow.VisitListView.as_view()),
+    path("api/visits/<int:pk>", grow.VisitDetailView.as_view()),
+    path("api/visits/<int:pk>/complete", grow.VisitActionView.as_view(action="complete")),
+    path("api/visits/<int:pk>/cancel", grow.VisitActionView.as_view(action="cancel")),
+    path("api/reports/overview", reports.ReportView.as_view(report="overview")),
+    path("api/reports/cases", reports.ReportView.as_view(report="cases")),
+    path("api/reports/staff", reports.ReportView.as_view(report="staff")),
+    path("api/reports/finance", reports.ReportView.as_view(report="finance")),
     # Files
     path("api/files/photo", files.PhotoUploadView.as_view()),
     path("api/files/document", files.DocumentUploadView.as_view()),

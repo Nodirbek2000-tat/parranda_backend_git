@@ -90,12 +90,12 @@ def _data_lines(stage) -> str:
     labels = {f.name: f for f in d.fields}
     rows = []
     for key, value in (stage.data or {}).items():
-        if key == "package_id":
+        if key in ("package_id", "finance"):
             continue
         f = labels.get(key)
         if f and f.choices:
             value = dict(f.choices).get(value, value)
-        if key == "amount" and isinstance(value, int):
+        if key in ("amount", "revenue", "price_per_kg") and isinstance(value, int):
             value = f"{value:,}".replace(",", " ") + " so‘m"
         rows.append(f"<b>{pdf_text(f.label if f else key)}:</b> {pdf_text(value)}")
     if stage.note and stage.note != (stage.data or {}).get("conclusion"):

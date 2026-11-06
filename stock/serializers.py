@@ -19,6 +19,7 @@ def move_json(m) -> dict:
         "type": m.type, "type_display": m.get_type_display(), "qty": float(m.qty),
         "balance_after": float(m.balance_after),
         "case": {"id": m.case_id, "code": m.case.code} if m.case_id else None,
+        "purpose": m.purpose,
         "note": m.note,
         "created_by": {"id": m.created_by_id, "full_name": m.created_by.full_name} if m.created_by_id else None,
         "created_at": m.created_at,

@@ -26,7 +26,7 @@ def chain_response(exc: ChainError) -> Response:
 
 def _detail(case_id, request):
     case = get_object_or_404(services.visible_cases(request.user).select_related(
-        "package", "owner_user", "created_by"), pk=case_id)
+        "package", "owner_user", "created_by", "vet_user"), pk=case_id)
     return Response(s.case_detail(case, request.user))
 
 

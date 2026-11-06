@@ -36,6 +36,35 @@ def compose(kind: str, case, stage_number: int, *, note: str = "", due_at=None) 
     return "\n".join(lines)
 
 
+#: v2.1 events (requests, visits, growing alerts) composed with `compose_rows`.
+EVENT_TITLES = {
+    "request_new": "📨 NNP — YANGI SO‘ROV",
+    "request_review": "📨 NNP — SO‘ROV TASDIQLASH KUTILMOQDA",
+    "request_deliver": "🚚 NNP — YEM YETKAZISH VAZIFASI",
+    "request_delivered": "🚚 NNP — YEM YETKAZILDI",
+    "request_rejected": "⛔ NNP — SO‘ROV RAD ETILDI",
+    "vet_assigned": "🩺 NNP — XONADON SIZGA BIRIKTIRILDI",
+    "visit_planned": "🩺 NNP — VETERINAR TASHRIFI REJALASHTIRILDI",
+    "visit_due": "🩺 NNP — BUGUN VETERINAR TASHRIFI",
+    "visit_overdue": "⏰ NNP — TASHRIF MUDDATI O‘TDI",
+    "visit_cancelled": "🚫 NNP — TASHRIF BEKOR QILINDI",
+    "growing_alert": "⏳ NNP — PARVARISH YAKUNLANMOQDA",
+}
+
+
+def compose_rows(kind: str, case, rows, *, op_id: str, lead: str = "") -> str:
+    """`rows` = [(label, value), ...]; empty values are skipped. Values are escaped here."""
+    lines = [f"<b>{EVENT_TITLES[kind]}</b>", ""]
+    if lead:
+        lines += [escape(lead), ""]
+    lines.append(f"<b>Xonadon:</b> {escape(case.code)} — {escape(case.name)}")
+    for label, value in rows:
+        if value not in (None, ""):
+            lines.append(f"<b>{escape(label)}:</b> {escape(str(value)[:500])}")
+    lines += ["", f"Operatsiya ID: #{escape(op_id)}"]
+    return "\n".join(lines)
+
+
 def queue(users, *, text: str, button_path: str, event_key: str) -> None:
     """Queue `text` for each user once the current transaction commits."""
     user_ids = sorted({user.pk for user in users if user is not None})

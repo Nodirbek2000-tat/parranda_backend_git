@@ -24,11 +24,13 @@ def _locked(product_ids) -> dict[int, Product]:
     return {product.pk: product for product in rows}
 
 
-def _move(product: Product, kind: str, qty: Decimal, *, user, note: str = "", case=None) -> StockMove:
+def _move(product: Product, kind: str, qty: Decimal, *, user, note: str = "", case=None,
+          purpose: str = "") -> StockMove:
     product.balance = product.balance + qty if kind == StockMove.IN else product.balance - qty
     product.save(update_fields=["balance"])
     return StockMove.objects.create(
-        product=product, type=kind, qty=qty, balance_after=product.balance, case=case, note=note, created_by=user
+        product=product, type=kind, qty=qty, balance_after=product.balance, case=case, note=note, created_by=user,
+        purpose=purpose,
     )
 
 
@@ -40,10 +42,10 @@ def stock_in(product_id: int, qty: Decimal, *, user, note: str = "") -> StockMov
     return move
 
 
-def issued_for_case(case) -> dict[int, Decimal]:
-    """Net quantity per product currently issued (OUT minus IN) for `case`."""
+def issued_for_case(case, purpose: str = StockMove.PACKAGE) -> dict[int, Decimal]:
+    """Net quantity per product currently issued (OUT minus IN) for `case` with this `purpose`."""
     rows = (
-        StockMove.objects.filter(case=case)
+        StockMove.objects.filter(case=case, purpose=purpose)
         .order_by()
         .values("product_id")
         .annotate(net=Sum(DbCase(When(type=StockMove.OUT, then=F("qty")), default=-F("qty"),
@@ -73,7 +75,8 @@ def issue_package(case, *, user) -> list[StockMove]:
     if missing:
         raise StockShortage(missing)
     note = f"{case.code}: paket berildi"
-    return [_move(products[pid], StockMove.OUT, qty, user=user, note=note, case=case) for pid, qty in needed.items()]
+    return [_move(products[pid], StockMove.OUT, qty, user=user, note=note, case=case, purpose=StockMove.PACKAGE)
+            for pid, qty in needed.items()]
 
 
 def return_package(case, *, user) -> list[StockMove]:
@@ -81,4 +84,31 @@ def return_package(case, *, user) -> list[StockMove]:
     issued = {pid: qty for pid, qty in issued_for_case(case).items() if qty > 0}
     products = _locked(issued.keys())
     note = f"{case.code}: bosqich qaytarildi, mahsulot omborga qaytdi"
-    return [_move(products[pid], StockMove.IN, qty, user=user, note=note, case=case) for pid, qty in issued.items()]
+    return [_move(products[pid], StockMove.IN, qty, user=user, note=note, case=case, purpose=StockMove.PACKAGE)
+            for pid, qty in issued.items()]
+
+
+def issue_items(case, items, *, user, note: str, purpose: str) -> list[StockMove]:
+    """Stock OUT of `items` = [(product_id, qty), ...] linked to `case` (v2.1: feed delivery, visit drugs).
+
+    All or nothing: raises StockShortage and writes nothing when any product is short.
+    Must run inside the caller's transaction.
+    """
+    needed: dict[int, Decimal] = {}
+    for pid, qty in items:
+        needed[pid] = needed.get(pid, Decimal(0)) + Decimal(qty)
+    products = _locked(needed.keys())
+    missing = [
+        {"product_id": pid, "name": products[pid].name, "unit": products[pid].unit,
+         "need": float(qty), "have": float(products[pid].balance)}
+        for pid, qty in needed.items()
+        if products[pid].balance < qty
+    ]
+    if missing:
+        raise StockShortage(missing)
+    moves = [_move(products[pid], StockMove.OUT, qty, user=user, note=note, case=case, purpose=purpose)
+             for pid, qty in needed.items()]
+    for move in moves:
+        log(user, "stock.out", move, after={"product": move.product_id, "qty": str(move.qty), "case": case.pk,
+                                           "purpose": purpose, "balance": str(move.balance_after)})
+    return moves
