@@ -38,12 +38,20 @@ class CaseListView(APIView):
             qs = qs.filter(status=params["status"])
         if params.get("stage", "").isdigit():
             qs = qs.filter(current_stage=int(params["stage"]))
+        if params.get("district"):
+            # "Urgut tumani" also matches households saved as just "Urgut"
+            name = params["district"].strip()
+            base = name.removesuffix(" tumani").removesuffix(" shahri").strip()
+            qs = qs.filter(Q(district__iexact=name) | Q(district__iexact=base))
         if params.get("search"):
             term = params["search"].strip()
             qs = qs.filter(Q(code__icontains=term) | Q(name__icontains=term) | Q(owner_full_name__icontains=term)
                            | Q(owner_phone__icontains=term) | Q(district__icontains=term) | Q(mfy__icontains=term))
-        qs = qs.select_related("package").prefetch_related("stages")
-        return Response([s.case_item(case) for case in qs[:500]])
+        from .summary import summaries
+
+        rows = list(qs.select_related("package").prefetch_related("stages")[:500])
+        stats = summaries(rows)
+        return Response([{**s.case_item(case), "summary": stats.get(case.pk)} for case in rows])
 
     def post(self, request):
         if request.user.role != Role.INSPECTOR:

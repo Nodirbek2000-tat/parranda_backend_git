@@ -148,6 +148,9 @@ REPORT_FONT_BOLD_PATH: str = env.str("REPORT_FONT_BOLD_PATH", "")
 # v2.1: growing period (stage 10) length in days, and the DEMO price of one chick (so‘m) for the finance block.
 GROWING_DAYS: int = env.int("GROWING_DAYS", 45)
 CHICK_PRICE: int = env.int("CHICK_PRICE", 8000)
+# Estimated revenue on the Xonadonlar list until the real sale is entered (DEMO defaults).
+EST_KG_PER_BIRD: float = env.float("EST_KG_PER_BIRD", 2.5)
+EST_PRICE_PER_KG: int = env.int("EST_PRICE_PER_KG", 30000)
 
 LOG_LEVEL: str = env.str("LOG_LEVEL", "INFO").upper()
 LOGGING = {

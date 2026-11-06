@@ -605,3 +605,23 @@ class DataMigrationTests(GrowingHelpers):
         self.migration.backwards(django_apps, None)
         self.assertEqual(Case.objects.get(pk=done_id).stages.count(), 10)
         self.assertEqual(Case.objects.get(pk=done_id).current_stage, 10)
+
+
+class CaseListSummaryTests(GrowingHelpers):
+    def test_list_has_summary_and_district_filter(self):
+        cid = self.growing_case()
+        rows = self.client_for(R.ADMIN).get("/api/cases").json()
+        row = next(r for r in rows if r["id"] == cid)
+        summary = row["summary"]
+        self.assertEqual(summary["birds_received"], 98)
+        self.assertEqual(summary["birds"], 98)
+        self.assertEqual(summary["days_since_delivery"], 0)
+        self.assertEqual(summary["growing_days"], 45)
+        self.assertEqual(summary["vet_visits"], 0)
+        self.assertGreater(summary["total_cost"], 0)
+        self.assertTrue(summary["revenue_is_estimate"])
+        self.assertEqual(summary["revenue"], int(98 * 2.5 * 30000))
+        # district filter: "Pop tumani" matches a household saved as "Pop"
+        admin = self.client_for(R.ADMIN)
+        self.assertEqual([r["id"] for r in admin.get("/api/cases", {"district": "Pop tumani"}).json()], [cid])
+        self.assertEqual(admin.get("/api/cases", {"district": "Urgut tumani"}).json(), [])
