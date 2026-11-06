@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Count, F, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -8,6 +9,7 @@ from rest_framework.views import APIView
 
 from accounts.auth import IsAdmin, role_required
 from accounts.models import Role
+from audit.models import log
 from stock.models import Package, Product
 from stock.serializers import product_json
 
@@ -63,6 +65,17 @@ class CaseListView(APIView):
 class CaseDetailView(APIView):
     def get(self, request, pk):
         return _detail(pk, request)
+
+    @transaction.atomic
+    def delete(self, request, pk):
+        """Soft delete (ADMIN / SUPERADMIN): hidden from every list; history rows keep pointing at it."""
+        if request.user.role not in (Role.ADMIN, Role.SUPERADMIN):
+            raise PermissionDenied("Xonadonni faqat Administrator o‘chira oladi.")
+        case = get_object_or_404(Case.objects.select_for_update(of=("self",)), pk=pk)
+        case.deleted_at = timezone.now()
+        case.save(update_fields=["deleted_at"])
+        log(request.user, "case.delete", case)
+        return Response(status=204)
 
 
 class StageActionView(APIView):

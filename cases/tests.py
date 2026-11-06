@@ -435,3 +435,40 @@ class PdfAndDashboardTests(ChainHelpers):
         self.assertEqual((d["in_progress"], d["rejected"], d["done"], d["total"]), (1, 1, 0, 2))
         self.assertEqual(len(d["events"]), 5)
         self.assertEqual(self.client_for(R.BUILDER).get("/api/dashboard").status_code, 403)
+
+
+class DeleteTests(ChainHelpers):
+    """O‘chirish (soft delete): xonadon, mahsulot, paket."""
+
+    def test_admin_deletes_case_it_disappears_everywhere(self):
+        detail = self.create_case()
+        cid = detail["id"]
+        self.assertEqual(self.client_for(R.HR).delete(f"/api/cases/{cid}").status_code, 403)
+        self.assertEqual(self.client_for(R.ADMIN).delete(f"/api/cases/{cid}").status_code, 204)
+        self.assertEqual(self.client_for(R.ADMIN).get(f"/api/cases/{cid}").status_code, 404)
+        self.assertEqual(self.client_for(R.HR).get("/api/cases?mine=1").json(), [])
+        self.assertEqual(self.client_for(R.ADMIN).get("/api/cases").json(), [])
+        self.assertTrue(Case.all_objects.filter(pk=cid, deleted_at__isnull=False).exists())
+        self.assertTrue(StageEvent.objects.filter(case_id=cid).exists())  # history kept
+        # The next case gets a new code, never the deleted one's.
+        self.assertNotEqual(self.create_case()["code"], detail["code"])
+
+    def test_product_delete_refused_while_in_package(self):
+        admin = self.client_for(R.ADMIN)
+        response = admin.delete(f"/api/products/{self.product_a.pk}")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("paket", response.json()["detail"])
+        loose = Product.objects.create(name="Mix", unit="kg", category="boshqa", balance=5)
+        self.assertEqual(self.client_for(R.WAREHOUSE).delete(f"/api/products/{loose.pk}").status_code, 204)
+        self.assertNotIn(loose.pk, [p["id"] for p in admin.get("/api/products").json()])
+        # The name is free again.
+        self.assertEqual(admin.post("/api/products", {"name": "Mix", "unit": "kg", "category": "boshqa"},
+                                    format="json").status_code, 201)
+
+    def test_package_delete_refused_while_case_in_progress(self):
+        self.create_case()
+        admin = self.client_for(R.ADMIN)
+        response = admin.delete(f"/api/packages/{self.package.pk}")
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("XN-", response.json()["detail"])
+        self.assertEqual(self.client_for(R.WAREHOUSE).delete(f"/api/packages/{self.package.pk}").status_code, 403)

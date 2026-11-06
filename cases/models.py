@@ -5,6 +5,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+from config.softdelete import AliveManager
+
 from . import stages as chain
 
 
@@ -45,6 +47,10 @@ class Case(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     done_at = models.DateTimeField(null=True, blank=True)
     reject_reason = models.TextField(blank=True)
+    deleted_at = models.DateTimeField("O‘chirilgan", null=True, blank=True)
+
+    objects = AliveManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["-id"]

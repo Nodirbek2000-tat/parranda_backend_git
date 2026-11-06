@@ -2,12 +2,14 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.auth import IsAdmin, role_required
 from accounts.models import Role
 from audit.models import log
+from config.softdelete import Conflict
 
 from . import services
 from .models import Package, PackageItem, Product, StockMove
@@ -44,6 +46,18 @@ class ProductListView(APIView):
 
 class ProductDetailView(APIView):
     permission_classes = [IsStockRole]
+
+    @transaction.atomic
+    def delete(self, request, pk):
+        product = get_object_or_404(Product.objects.select_for_update(of=("self",)), pk=pk)
+        packages = list(Package.objects.filter(items__product=product).values_list("name", flat=True))
+        if packages:
+            raise Conflict(f"Bu mahsulot paket tarkibida bor ({', '.join(packages)}). Avval uni paketdan olib tashlang.")
+        product.deleted_at = timezone.now()
+        product.name = f"{product.name} (o‘chirilgan #{product.pk})"[:200]  # frees the unique name
+        product.save(update_fields=["deleted_at", "name"])
+        log(request.user, "product.delete", product)
+        return Response(status=204)
 
     def patch(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
@@ -89,6 +103,20 @@ class PackageListView(APIView):
 
 class PackageDetailView(APIView):
     permission_classes = [IsAdmin]
+
+    @transaction.atomic
+    def delete(self, request, pk):
+        from cases.models import Case, CaseStatus
+
+        package = get_object_or_404(Package.objects.select_for_update(of=("self",)), pk=pk)
+        busy = list(Case.objects.filter(package=package, status=CaseStatus.IN_PROGRESS).values_list("code", flat=True)[:5])
+        if busy:
+            raise Conflict(f"Bu paket jarayondagi xonadonlarda ishlatilmoqda ({', '.join(busy)}). Avval ularni yakunlang.")
+        package.deleted_at = timezone.now()
+        package.name = f"{package.name} (o‘chirilgan #{package.pk})"[:200]
+        package.save(update_fields=["deleted_at", "name"])
+        log(request.user, "package.delete", package)
+        return Response(status=204)
 
     def get(self, request, pk):
         return Response(package_json(get_object_or_404(Package, pk=pk)))

@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from config.softdelete import AliveManager
+
 
 class Unit(models.TextChoices):
     KG = "kg", "kg"
@@ -28,6 +30,10 @@ class Product(models.Model):
     balance = models.DecimalField("Qoldiq", max_digits=14, decimal_places=3, default=0)
     min_stock = models.DecimalField("Minimal qoldiq", max_digits=14, decimal_places=3, default=0)
     is_demo = models.BooleanField("DEMO", default=False)
+    deleted_at = models.DateTimeField("O‘chirilgan", null=True, blank=True)
+
+    objects = AliveManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["category", "name"]
@@ -72,6 +78,10 @@ class Package(models.Model):
     price = models.DecimalField("Narxi (so‘m)", max_digits=14, decimal_places=2, default=0)
     description = models.TextField("Tavsif", blank=True)
     is_demo = models.BooleanField("DEMO", default=False)
+    deleted_at = models.DateTimeField("O‘chirilgan", null=True, blank=True)
+
+    objects = AliveManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["area_sotix", "id"]
