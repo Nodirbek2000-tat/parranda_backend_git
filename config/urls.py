@@ -1,40 +1,62 @@
-"""Root URLs. Every API route lives under ``/api/`` and has no trailing slash."""
-
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import path
 
-from common.health import DocsView, HealthView, SchemaView
-from common.ids import register_id_converter
+from accounts import views as acc
+from audit.views import AuditListView
+from cases import files
+from cases import views as cases
+from notify import views as notify
+from stock import views as stock
 
-register_id_converter()  # ``<id:pk>`` for every app below
+from .views import HealthView
 
-# Module teams add routes ONLY in their own <app>/urls.py; this list is complete for API_CONTRACT_V3.
-api_patterns = [
-    path("health", HealthView.as_view(), name="api-health"),
-    path("schema", SchemaView.as_view(), name="api-schema"),
-    path("docs", DocsView.as_view(), name="api-docs"),
-    path("", include("accounts.urls")),
-    path("", include("farm.urls")),
-    path("", include("warehouse.urls")),
-    path("", include("notifications.urls")),
-    path("", include("dashboard.urls")),
-    path("", include("stats.urls")),
-    path("", include("audit.urls")),
-    # V3 apps (API_CONTRACT_V3 §0.2)
-    path("", include("core.urls")),
-    path("", include("orders.urls")),
-    path("", include("logistics.urls")),
-    path("", include("vet.urls")),
-    path("", include("reports.urls")),
-    path("", include("builder.urls")),
-    path("", include("acts.urls")),
-]
-
-# Unknown URLs and unhandled errors also answer in JSON (used when DEBUG is off).
-handler404 = "common.views.not_found"
-handler500 = "common.views.server_error"
+admin.site.site_header = "NNP — boshqaruv"
+admin.site.site_title = "NNP"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/", include(api_patterns)),
+    path("api/health", HealthView.as_view()),
+    # Auth
+    path("api/auth/login", acc.LoginView.as_view()),
+    path("api/auth/refresh", acc.RefreshView.as_view()),
+    path("api/auth/logout", acc.LogoutView.as_view()),
+    path("api/auth/telegram", acc.TelegramAuthView.as_view()),
+    path("api/auth/change-password", acc.ChangePasswordView.as_view()),
+    path("api/auth/me", acc.MeView.as_view()),
+    # Users
+    path("api/users", acc.UserListView.as_view()),
+    path("api/users/<int:pk>", acc.UserDetailView.as_view()),
+    path("api/users/<int:pk>/reset-password", acc.ResetPasswordView.as_view()),
+    # Cases
+    path("api/cases", cases.CaseListView.as_view()),
+    path("api/cases/<int:pk>", cases.CaseDetailView.as_view()),
+    path("api/cases/<int:pk>/stages/<int:n>/submit", cases.StageActionView.as_view(action="submit")),
+    path("api/cases/<int:pk>/stages/<int:n>/approve", cases.StageActionView.as_view(action="approve")),
+    path("api/cases/<int:pk>/stages/<int:n>/return", cases.StageActionView.as_view(action="return")),
+    path("api/cases/<int:pk>/reject", cases.RejectView.as_view()),
+    path("api/cases/<int:pk>/owner-account", cases.OwnerAccountView.as_view()),
+    path("api/cases/<int:pk>/pdf", cases.CasePdfView.as_view()),
+    path("api/dashboard", cases.DashboardView.as_view()),
+    # Files
+    path("api/files/photo", files.PhotoUploadView.as_view()),
+    path("api/files/document", files.DocumentUploadView.as_view()),
+    path("api/files/<str:kind>/<int:pk>", files.FileView.as_view()),
+    # Stock
+    path("api/products", stock.ProductListView.as_view()),
+    path("api/products/<int:pk>", stock.ProductDetailView.as_view()),
+    path("api/stock/in", stock.StockInView.as_view()),
+    path("api/stock/moves", stock.StockMovesView.as_view()),
+    path("api/packages", stock.PackageListView.as_view()),
+    path("api/packages/<int:pk>", stock.PackageDetailView.as_view()),
+    # Notifications and audit
+    path("api/notifications", notify.InboxView.as_view()),
+    path("api/notifications/<int:pk>/read", notify.ReadView.as_view()),
+    path("api/audit", AuditListView.as_view()),
+    # Bot API (X-Bot-Token)
+    path("api/bot/link", notify.BotLinkView.as_view()),
+    path("api/bot/unlink", notify.BotUnlinkView.as_view()),
+    path("api/bot/me/<int:telegram_id>", notify.BotMeView.as_view()),
+    path("api/bot/tasks/<int:telegram_id>", notify.BotTasksView.as_view()),
+    path("api/bot/notifications/pending", notify.BotPendingView.as_view()),
+    path("api/bot/notifications/<int:pk>/result", notify.BotResultView.as_view()),
 ]

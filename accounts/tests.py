@@ -1,255 +1,154 @@
-from __future__ import annotations
-
 import json
 import time
 from urllib.parse import urlencode
 
-from django.test import SimpleTestCase, override_settings
+from django.test import override_settings
+from rest_framework.test import APIClient
 
-from common.exceptions import translate_message
-from common.formatting import fmt_number
-from common.roles import Role
-from common.testing import BOT_TOKEN, BaseAPITestCase, make_user
+from accounts.models import Role, User
+from accounts.telegram import build_data_check_string, sign
+from audit.models import AuditLog
+from config.testutils import NNPTestCase
 
-from .models import User
-from .telegram import InitDataInvalid, build_data_check_string, sign, validate_init_data
+BOT_TOKEN = "123:test-bot-token"
 
 
-def signed_init_data(telegram_id: int, *, bot_token: str = BOT_TOKEN, auth_date: int | None = None) -> str:
-    fields = {
-        "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
-        "user": json.dumps({"id": telegram_id, "first_name": "Ali", "username": "ali"}, separators=(",", ":")),
-        "auth_date": str(int(time.time()) if auth_date is None else auth_date),
-    }
-    fields["hash"] = sign(build_data_check_string(fields), bot_token)
+def init_data(telegram_id: int, *, token=BOT_TOKEN, auth_date=None) -> str:
+    fields = {"auth_date": str(auth_date or int(time.time())), "query_id": "AAE",
+              "user": json.dumps({"id": telegram_id, "first_name": "Ali"})}
+    fields["hash"] = sign(build_data_check_string(fields), token)
     return urlencode(fields)
 
 
-class InitDataUnitTests(SimpleTestCase):
-    def test_valid_payload_returns_user_id(self):
-        self.assertEqual(validate_init_data(signed_init_data(777), BOT_TOKEN), 777)
+class LoginTests(NNPTestCase):
+    def login(self, username, password):
+        return APIClient().post("/api/auth/login", {"username": username, "password": password}, format="json")
 
-    def test_tampered_payload_is_rejected(self):
-        original = signed_init_data(777)
-        data = original.replace("%3A777%2C", "%3A778%2C")
-        self.assertNotEqual(original, data)
-        with self.assertRaises(InitDataInvalid):
-            validate_init_data(data, BOT_TOKEN)
+    def test_login_shape_and_me(self):
+        r = self.login("inspector", "Parol-12345")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(set(body), {"access", "refresh", "user"})
+        for key in ("id", "username", "full_name", "role", "role_display", "is_superadmin", "must_change_password"):
+            self.assertIn(key, body["user"])
+        self.assertEqual(body["user"]["role_display"], "Inspektor")
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {body['access']}")
+        self.assertEqual(client.get("/api/auth/me").json()["username"], "inspector")
+        r = APIClient().post("/api/auth/refresh", {"refresh": body["refresh"]}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("access", r.json())
 
-    def test_wrong_bot_token_is_rejected(self):
-        with self.assertRaises(InitDataInvalid):
-            validate_init_data(signed_init_data(777, bot_token="other:token"), BOT_TOKEN)
+    def test_bad_password_and_blocked(self):
+        r = self.login("inspector", "wrong")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json(), {"detail": "Login yoki parol noto‘g‘ri"})
+        User.objects.filter(username="inspector").update(is_active=False)
+        self.assertEqual(self.login("inspector", "Parol-12345").status_code, 401)
 
-    def test_expired_payload_is_rejected(self):
-        old = int(time.time()) - 86_401
-        with self.assertRaises(InitDataInvalid):
-            validate_init_data(signed_init_data(777, auth_date=old), BOT_TOKEN)
+    def test_temporary_password_gate_and_change(self):
+        User.objects.filter(username="hr").update(must_change_password=True)
+        tokens = self.login("hr", "Parol-12345").json()
+        client = APIClient()
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+        self.assertEqual(client.get("/api/cases").status_code, 403)
+        self.assertEqual(client.get("/api/auth/me").status_code, 200)
+        r = client.post("/api/auth/change-password", {"old_password": "bad", "new_password": "Yangi-parol-1"},
+                        format="json")
+        self.assertEqual(r.status_code, 400)
+        r = client.post("/api/auth/change-password", {"old_password": "Parol-12345", "new_password": "Yangi-parol-1"},
+                        format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["user"]["must_change_password"])
+        # old tokens are revoked (token_version), new ones work
+        self.assertEqual(client.get("/api/auth/me").status_code, 401)
+        refresh = APIClient().post("/api/auth/refresh", {"refresh": tokens["refresh"]}, format="json")
+        self.assertEqual(refresh.status_code, 401)
+        client.credentials(HTTP_AUTHORIZATION=f"Bearer {r.json()['access']}")
+        self.assertEqual(client.get("/api/cases").status_code, 200)
 
-    def test_missing_hash_and_empty_token(self):
-        with self.assertRaises(InitDataInvalid):
-            validate_init_data("auth_date=1&user=%7B%7D", BOT_TOKEN)
-        with self.assertRaises(InitDataInvalid):
-            validate_init_data(signed_init_data(777), "")
-
-
-class CommonHelpersTests(SimpleTestCase):
-    def test_number_format(self):
-        self.assertEqual(fmt_number(1500), "1 500")
-        self.assertEqual(fmt_number(1234567), "1 234 567")
-        self.assertEqual(fmt_number("310.50"), "310.5")
-        self.assertEqual(fmt_number(0), "0")
-
-    def test_drf_messages_are_translated(self):
-        self.assertEqual(translate_message("This field is required."), "Bu maydon to‘ldirilishi shart.")
-        self.assertEqual(translate_message("No Household matches the given query."), "Topilmadi.")
-        self.assertEqual(translate_message("Allaqachon o‘zbekcha"), "Allaqachon o‘zbekcha")
-
-
-class LoginTests(BaseAPITestCase):
-    url = "/api/auth/login"
-
-    def test_owner_logs_in(self):
-        response = self.client.post(self.url, {"username": "owner_a", "password": "Parol12345"}, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("access", response.data)
-        self.assertIn("refresh", response.data)
-        self.assertEqual(response.data["user"]["role"], Role.OWNER)
-        self.assertEqual(response.data["user"]["household_id"], self.household_a.pk)
-
-        access = response.data["access"]
-        me = self.client.get("/api/auth/me", HTTP_AUTHORIZATION=f"Bearer {access}")
-        self.assertEqual(me.status_code, 200)
-        self.assertEqual(me.data["username"], "owner_a")
-
-    def test_wrong_password_is_401(self):
-        response = self.client.post(self.url, {"username": "owner_a", "password": "xato"}, format="json")
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.data["detail"], "Login yoki parol noto‘g‘ri")
-
-    def test_unknown_user_is_401(self):
-        response = self.client.post(self.url, {"username": "nobody", "password": "xato"}, format="json")
-        self.assertEqual(response.status_code, 401)
-
-    def test_blocked_user_is_403(self):
-        User.objects.filter(pk=self.owner_a.pk).update(is_active=False)
-        response = self.client.post(self.url, {"username": "owner_a", "password": "Parol12345"}, format="json")
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["detail"], "Hisobingiz bloklangan. Administratorga murojaat qiling.")
-
-    def test_superuser_is_reported_as_admin(self):
-        make_user("root", Role.OWNER, is_superuser=True, is_staff=True)
-        response = self.client.post(self.url, {"username": "root", "password": "Parol12345"}, format="json")
-        self.assertEqual(response.data["user"]["role"], Role.ADMIN)
-        self.assertIsNone(response.data["user"]["household_id"])
-
-    def test_refresh_returns_access(self):
-        tokens = self.client.post(self.url, {"username": "admin1", "password": "Parol12345"}, format="json").data
-        response = self.client.post("/api/auth/refresh", {"refresh": tokens["refresh"]}, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("access", response.data)
-
-    def test_login_is_throttled(self):
-        for _ in range(10):
-            self.client.post(self.url, {"username": "owner_a", "password": "xato"}, format="json")
-        response = self.client.post(self.url, {"username": "owner_a", "password": "xato"}, format="json")
-        self.assertEqual(response.status_code, 429)
-
-    def test_trailing_slash_is_not_routed(self):
-        response = self.client.post(f"{self.url}/", {"username": "owner_a", "password": "x"}, format="json")
-        self.assertEqual(response.status_code, 404)
-
-    def test_missing_fields_have_uzbek_messages(self):
-        response = self.client.post(self.url, {}, format="json")
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data["username"], ["Bu maydon to‘ldirilishi shart."])
+    def test_superuser_is_superadmin(self):
+        user = User.objects.create_superuser("root", "r@x.uz", "Parol-12345")
+        self.assertEqual(user.role, Role.SUPERADMIN)
+        self.assertTrue(self.login("root", "Parol-12345").json()["user"]["is_superadmin"])
 
 
-class ChangePasswordTests(BaseAPITestCase):
-    url = "/api/auth/change-password"
+class TelegramAuthTests(NNPTestCase):
+    def test_valid_hmac_logs_in_linked_user(self):
+        User.objects.filter(username="vet").update(telegram_id=555)
+        r = APIClient().post("/api/auth/telegram", {"init_data": init_data(555)}, format="json")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(r.json()["user"]["username"], "vet")
+        self.assertIn("access", r.json())
 
-    def test_change_password(self):
-        User.objects.filter(pk=self.owner_a.pk).update(must_change_password=True)
-        self.login_as(self.owner_a)
-        response = self.client.post(
-            self.url, {"old_password": "Parol12345", "new_password": "YangiParol2026"}, format="json"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["detail"], "Parol yangilandi")
-        self.owner_a.refresh_from_db()
-        self.assertFalse(self.owner_a.must_change_password)
-        self.assertTrue(self.owner_a.check_password("YangiParol2026"))
-
-    def test_rules(self):
-        self.login_as(self.owner_a)
-        short = self.client.post(self.url, {"old_password": "Parol12345", "new_password": "qisqa"}, format="json")
-        self.assertEqual(short.status_code, 400)
-        self.assertIn("new_password", short.data)
-        same = self.client.post(
-            self.url, {"old_password": "Parol12345", "new_password": "Parol12345"}, format="json"
-        )
-        self.assertEqual(same.status_code, 400)
-        wrong = self.client.post(self.url, {"old_password": "xato", "new_password": "YangiParol2026"}, format="json")
-        self.assertEqual(wrong.status_code, 400)
-        self.assertIn("old_password", wrong.data)
-
-
-class UserManagementTests(BaseAPITestCase):
-    def test_admin_creates_staff_user(self):
-        self.login_as(self.admin)
-        response = self.client.post(
-            "/api/users",
-            {"username": "ombor2", "first_name": "Dilshod", "last_name": "Karimov", "phone": "+998901112233",
-             "role": "WAREHOUSE"},
-            format="json",
-        )
-        self.assertEqual(response.status_code, 201)
-        password = response.data["temp_password"]
-        self.assertEqual(len(password), 10)
-        self.assertTrue(password.isalnum())
-        self.assertTrue(response.data["user"]["must_change_password"])
-        self.assertEqual(response.data["user"]["role"], "WAREHOUSE")
-        self.assertTrue(User.objects.get(username="ombor2").check_password(password))
-
-    def test_owner_role_cannot_be_created_directly(self):
-        self.login_as(self.admin)
-        response = self.client.post(
-            "/api/users", {"username": "x_owner", "first_name": "X", "role": "OWNER"}, format="json"
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("role", response.data)
-
-    def test_non_admin_is_forbidden(self):
-        self.login_as(self.warehouse)
-        self.assertEqual(self.client.get("/api/users").status_code, 403)
-        self.login_as(self.owner_a)
-        self.assertEqual(self.client.get("/api/users").status_code, 403)
-
-    def test_anonymous_is_401(self):
-        self.assertEqual(self.client.get("/api/users").status_code, 401)
-
-    def test_admin_cannot_block_himself(self):
-        self.login_as(self.admin)
-        response = self.client.patch(f"/api/users/{self.admin.pk}", {"is_active": False}, format="json")
-        self.assertEqual(response.status_code, 400)
-        response = self.client.patch(f"/api/users/{self.warehouse.pk}", {"is_active": False}, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.data["is_active"])
-
-    def test_reset_password_and_unlink(self):
-        User.objects.filter(pk=self.warehouse.pk).update(telegram_id=555)
-        self.login_as(self.admin)
-        response = self.client.post(f"/api/users/{self.warehouse.pk}/reset-password")
-        self.assertEqual(response.status_code, 200)
-        self.warehouse.refresh_from_db()
-        self.assertTrue(self.warehouse.must_change_password)
-        self.assertTrue(self.warehouse.check_password(response.data["temp_password"]))
-        response = self.client.post(f"/api/users/{self.warehouse.pk}/unlink-telegram")
-        self.assertEqual(response.data["detail"], "Telegram uzildi")
-        self.warehouse.refresh_from_db()
-        self.assertIsNone(self.warehouse.telegram_id)
-
-    def test_list_filters(self):
-        self.login_as(self.admin)
-        response = self.client.get("/api/users?role=OWNER")
-        self.assertEqual({u["username"] for u in response.data["results"]}, {"owner_a", "owner_b"})
-        response = self.client.get("/api/users?search=ombor")
-        self.assertEqual([u["username"] for u in response.data["results"]], ["ombor1"])
-        self.assertEqual(self.client.get("/api/users?role=BAD").status_code, 400)
-
-
-@override_settings(BOT_TOKEN=BOT_TOKEN)
-class TelegramAuthTests(BaseAPITestCase):
-    url = "/api/auth/telegram"
-
-    def test_linked_user_gets_tokens(self):
-        User.objects.filter(pk=self.owner_a.pk).update(telegram_id=4242)
-        response = self.client.post(self.url, {"init_data": signed_init_data(4242)}, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["user"]["username"], "owner_a")
-        self.assertIn("access", response.data)
-
-    def test_tampered_payload_is_401(self):
-        User.objects.filter(pk=self.owner_a.pk).update(telegram_id=4242)
-        original = signed_init_data(4243)
-        tampered = original.replace("%3A4243%2C", "%3A4242%2C")
-        self.assertNotEqual(original, tampered)
-        response = self.client.post(self.url, {"init_data": tampered}, format="json")
-        self.assertEqual(response.status_code, 401)
-
-    def test_not_linked_is_403(self):
-        response = self.client.post(self.url, {"init_data": signed_init_data(999)}, format="json")
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(
-            response.data["detail"], "Telegram akkauntingiz tizimga bog‘lanmagan. Botda /start bosing."
-        )
-
-    def test_blocked_is_403(self):
-        User.objects.filter(pk=self.owner_a.pk).update(telegram_id=4242, is_active=False)
-        response = self.client.post(self.url, {"init_data": signed_init_data(4242)}, format="json")
-        self.assertEqual(response.status_code, 403)
+    def test_invalid_hmac_expired_and_unlinked(self):
+        User.objects.filter(username="vet").update(telegram_id=555)
+        bad = init_data(555, token="999:other")
+        self.assertEqual(APIClient().post("/api/auth/telegram", {"init_data": bad}, format="json").status_code, 401)
+        tampered = init_data(555).replace("555", "556")
+        self.assertEqual(APIClient().post("/api/auth/telegram", {"init_data": tampered}, format="json").status_code,
+                         401)
+        old = init_data(555, auth_date=int(time.time()) - 2 * 86400)
+        self.assertEqual(APIClient().post("/api/auth/telegram", {"init_data": old}, format="json").status_code, 401)
+        self.assertEqual(APIClient().post("/api/auth/telegram", {"init_data": ""}, format="json").status_code, 401)
+        r = APIClient().post("/api/auth/telegram", {"init_data": init_data(777)}, format="json")
+        self.assertEqual(r.status_code, 404)
 
     @override_settings(BOT_TOKEN="")
-    def test_empty_bot_token_is_401(self):
-        User.objects.filter(pk=self.owner_a.pk).update(telegram_id=4242)
-        response = self.client.post(self.url, {"init_data": signed_init_data(4242)}, format="json")
-        self.assertEqual(response.status_code, 401)
+    def test_disabled_without_bot_token(self):
+        User.objects.filter(username="vet").update(telegram_id=555)
+        r = APIClient().post("/api/auth/telegram", {"init_data": init_data(555)}, format="json")
+        self.assertEqual(r.status_code, 401)
+
+
+class UserAdminTests(NNPTestCase):
+    def test_admin_creates_staff_with_temp_password(self):
+        r = self.client_for(Role.ADMIN).post(
+            "/api/users", {"username": "vet2", "full_name": "Vet Ikki", "phone": "+998", "role": "VET"},
+            format="json")
+        self.assertEqual(r.status_code, 201, r.content)
+        body = r.json()
+        self.assertTrue(body["temp_password"])
+        self.assertTrue(body["must_change_password"])
+        self.assertTrue(User.objects.get(username="vet2").check_password(body["temp_password"]))
+        self.assertTrue(AuditLog.objects.filter(action="user.create").exists())
+        dup = self.client_for(Role.ADMIN).post("/api/users", {"username": "VET2", "full_name": "x", "role": "VET"},
+                                               format="json")
+        self.assertEqual(dup.status_code, 400)
+
+    def test_role_rules(self):
+        self.assertEqual(self.client_for(Role.HR).get("/api/users").status_code, 403)
+        self.assertEqual(self.client_for(Role.ADMIN).get("/api/users").status_code, 200)
+        r = self.client_for(Role.ADMIN).post("/api/users", {"username": "a2", "full_name": "x", "role": "ADMIN"},
+                                             format="json")
+        self.assertEqual(r.status_code, 403)
+        r = self.client_for(Role.SUPERADMIN).post("/api/users", {"username": "a2", "full_name": "x", "role": "ADMIN"},
+                                                  format="json")
+        self.assertEqual(r.status_code, 201)
+
+    def test_patch_reset_delete(self):
+        vet = self.users[Role.VET]
+        admin = self.client_for(Role.ADMIN)
+        r = admin.patch(f"/api/users/{vet.pk}", {"role": "LOGISTICS", "full_name": "Yangi", "is_active": False},
+                        format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["role"], r.json()["is_active"]), ("LOGISTICS", False))
+        version = User.objects.get(pk=vet.pk).token_version
+        r = admin.post(f"/api/users/{vet.pk}/reset-password")
+        self.assertTrue(r.json()["temp_password"])
+        self.assertEqual(User.objects.get(pk=vet.pk).token_version, version + 1)
+        self.assertEqual(admin.delete(f"/api/users/{self.users[Role.ADMIN].pk}").status_code, 400)  # own account
+        self.assertEqual(admin.delete(f"/api/users/{vet.pk}").status_code, 204)
+        self.assertNotIn(vet.pk, [u["id"] for u in admin.get("/api/users").json()])
+        self.assertEqual(admin.get(f"/api/users/{vet.pk}").status_code, 404)
+
+    def test_last_superadmin_protected(self):
+        sa = self.users[Role.SUPERADMIN]
+        other = User.objects.create_user(username="sa2", password="x", role=Role.SUPERADMIN)
+        client = self.client_for(other)
+        self.assertEqual(client.delete(f"/api/users/{sa.pk}").status_code, 204)
+        self.assertEqual(client.delete(f"/api/users/{other.pk}").status_code, 400)  # self
+        r = self.client_for(other).patch(f"/api/users/{other.pk}", {"role": "ADMIN"}, format="json")
+        self.assertEqual(r.status_code, 400)
+        admin = self.client_for(Role.ADMIN)
+        self.assertEqual(admin.delete(f"/api/users/{other.pk}").status_code, 403)

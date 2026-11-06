@@ -1,31 +1,18 @@
-asgiref==3.13.0
-attrs==26.1.0
-charset-normalizer==3.5.2
-django-cors-headers==4.9.0
+# NNP backend v2 (Python 3.11). Server-only extras live in requirements-docker.txt.
 Django==5.2.19
+asgiref==3.13.0
+sqlparse==0.6.1
+tzdata==2026.6
 djangorestframework==3.18.3
 djangorestframework_simplejwt==5.5.1
-drf-spectacular-sidecar==2026.10.1
-drf-spectacular==0.30.0
-environs==15.2.0
-et_xmlfile==2.0.0
-inflection==0.5.1
-jsonschema-specifications==2025.9.1
-jsonschema==4.26.0
-marshmallow==4.4.0
-openpyxl==3.1.5
-pillow==13.0.0
 PyJWT==2.15.1
+django-cors-headers==4.9.0
+environs==15.2.0
+marshmallow==4.4.0
 python-dotenv==1.2.4
-PyYAML==6.0.3
-referencing==0.37.0
-reportlab==5.1.0
-rpds-py==2026.9.1
-sqlparse==0.6.1
 typing_extensions==4.16.0
-tzdata==2026.6
-uritemplate==4.2.0
-# Optional, only when DATABASE_URL points to PostgreSQL:
-# psycopg[binary]  (pin the version you install)
-# Optional, only when FILE_STORAGE=s3 (API_CONTRACT_V3 §4.5):
-# django-storages[s3] boto3  (pin the versions you install)
+pillow==13.0.0
+reportlab==5.1.0
+charset-normalizer==3.5.2
+# Optional, only when DATABASE_URL points to PostgreSQL (installed in Docker via requirements-docker.txt):
+# psycopg[binary]==3.2.9

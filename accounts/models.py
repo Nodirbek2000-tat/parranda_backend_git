@@ -1,52 +1,74 @@
-from __future__ import annotations
+import secrets
 
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 
-from common.roles import Role
+
+class Role(models.TextChoices):
+    SUPERADMIN = "SUPERADMIN", "Super Admin"
+    ADMIN = "ADMIN", "Administrator"
+    INSPECTOR = "INSPECTOR", "Inspektor"
+    HR = "HR", "HR"
+    DIRECTOR = "DIRECTOR", "Direktor"
+    BUILDER = "BUILDER", "Qurilish"
+    WAREHOUSE = "WAREHOUSE", "Omborchi"
+    INCUBATOR = "INCUBATOR", "Inkubatsiya"
+    LOGISTICS = "LOGISTICS", "Logistika"
+    VET = "VET", "Veterinar"
+    OWNER = "OWNER", "Xonadon egasi"
+    ACCOUNTANT = "ACCOUNTANT", "Buxgalter"
+
+
+class ActiveUserManager(UserManager):
+    """Users that are not soft-deleted (blocked ones are included)."""
+
+    def alive(self):
+        return self.filter(deleted_at__isnull=True)
+
+    def active_with_role(self, *roles):
+        return self.filter(deleted_at__isnull=True, is_active=True, role__in=roles)
 
 
 class User(AbstractUser):
-    """System user. A superuser is always treated as ``ADMIN`` (see ``effective_role``)."""
-
-    role = models.CharField("Rol", max_length=16, choices=Role.choices, default=Role.OWNER)
-    phone = models.CharField("Telefon", max_length=32, blank=True)
+    role = models.CharField("Rol", max_length=20, choices=Role.choices, default=Role.INSPECTOR)
+    full_name = models.CharField("F.I.Sh.", max_length=200, blank=True)
+    phone = models.CharField("Telefon", max_length=30, blank=True)
     telegram_id = models.BigIntegerField("Telegram ID", unique=True, null=True, blank=True)
-    must_change_password = models.BooleanField("Parolni almashtirishi shart", default=False)
-    # Incremented to revoke every JWT issued so far (see accounts/tokens.py).
-    token_version = models.PositiveIntegerField("Sessiya versiyasi", default=0, editable=False)
-    # Set when every session is ended (admin "end sessions", logout with all=true): a Telegram
-    # initData signed before this moment cannot log in again (accounts/views.py TelegramAuthView).
-    sessions_revoked_at = models.DateTimeField("Sessiyalar yakunlangan vaqt", null=True, blank=True, editable=False)
-    # Set when an admin deletes the account. The row stays (stock operations, orders, audit and
-    # other history keep pointing to it), but it is blocked, unlinked from Telegram, hidden from
-    # every user list and its login name is freed (accounts/services.py delete_user).
-    deleted_at = models.DateTimeField("O‘chirilgan vaqt", null=True, blank=True, editable=False)
+    must_change_password = models.BooleanField("Parolni almashtirish shart", default=False)
+    token_version = models.PositiveIntegerField(default=0)
+    deleted_at = models.DateTimeField("O‘chirilgan", null=True, blank=True)
 
-    class Meta(AbstractUser.Meta):
+    objects = ActiveUserManager()
+
+    class Meta:
         verbose_name = "Foydalanuvchi"
         verbose_name_plural = "Foydalanuvchilar"
-        indexes = [models.Index(fields=["role"])]
+
+    def save(self, *args, **kwargs):
+        # Superuser = SUPERADMIN (both directions), so `createsuperuser` gives a working account.
+        if self.is_superuser:
+            self.role = Role.SUPERADMIN
+        if self.role == Role.SUPERADMIN:
+            self.is_superuser = self.is_staff = True
+        if not self.full_name:
+            self.full_name = f"{self.first_name} {self.last_name}".strip() or self.username
+        super().save(*args, **kwargs)
 
     @property
-    def effective_role(self) -> str:
-        return Role.ADMIN if self.is_superuser else self.role
+    def is_superadmin(self) -> bool:
+        return self.role == Role.SUPERADMIN
 
     @property
-    def full_name(self) -> str:
-        return self.get_full_name().strip() or self.username
-
-    @property
-    def telegram_linked(self) -> bool:
-        return self.telegram_id is not None
-
-    @property
-    def household_id_or_none(self) -> int | None:
-        """Primary key of the household this OWNER runs (``None`` for staff)."""
-        if self.effective_role != Role.OWNER:
-            return None
-        household = getattr(self, "household", None)
-        return household.pk if household is not None else None
+    def is_admin(self) -> bool:
+        """ADMIN or SUPERADMIN."""
+        return self.role in (Role.ADMIN, Role.SUPERADMIN)
 
     def __str__(self) -> str:
         return f"{self.full_name} ({self.username})"
+
+
+_ALPHABET = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def make_temp_password(length: int = 10) -> str:
+    return "".join(secrets.choice(_ALPHABET) for _ in range(length))
