@@ -1,6 +1,7 @@
 """v2.1 §7 reports (ADMIN, SUPERADMIN): GET /api/reports/{overview|cases|staff|finance}.
 
-Every report takes `?date_from=&date_to=` (case created_at, local dates, inclusive) and `?format=xlsx` (openpyxl).
+Every report takes `?date_from=&date_to=` (case created_at, local dates, inclusive), `?district=` (tuman/shahar)
+and `?format=xlsx` (openpyxl).
 A stage is late when it was submitted after its due_at, or is still open past due_at.
 """
 
@@ -54,6 +55,10 @@ def filtered_cases(params):
         qs = qs.filter(created_at__date__gte=date_from)
     if date_to:
         qs = qs.filter(created_at__date__lte=date_to)
+    district = (params.get("district") or "").strip()
+    if district:
+        base = district.removesuffix(" tumani").removesuffix(" shahri").strip()
+        qs = qs.filter(Q(district__iexact=district) | Q(district__iexact=base))
     return qs, date_from, date_to
 
 
@@ -144,7 +149,7 @@ def overview(params) -> dict:
             fin["in_progress"]["cost"] += f["total_cost"]
 
     return {
-        "date_from": date_from, "date_to": date_to,
+        "date_from": date_from, "date_to": date_to, "district": (params.get("district") or "").strip() or None,
         "cases": totals,
         "per_stage": list(per_stage.values()),
         "timing": timing_total,
@@ -308,6 +313,7 @@ def overview_sheets(d):
     c, fin = d["cases"], d["finance"]
     summary = [
         ("Davr", f"{d['date_from'] or '…'} — {d['date_to'] or '…'}"),
+        ("Tuman / shahar", d.get("district") or "Barchasi"),
         ("Jami xonadonlar", c["total"]), ("Jarayonda", c["in_progress"]), ("Yakunlangan", c["done"]),
         ("Rad etilgan", c["rejected"]),
         ("Bosqichlar o‘z vaqtida", d["timing"]["on_time"]), ("Kechikkan (bajarilgan)", d["timing"]["late"]),

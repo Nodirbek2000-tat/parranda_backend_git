@@ -69,7 +69,9 @@ def case_item(case):
     in_progress = case.status == CaseStatus.IN_PROGRESS
     return {
         "id": case.pk, "code": case.code, "name": case.name, "owner_full_name": case.owner_full_name,
-        "owner_phone": case.owner_phone, "region": case.region, "district": case.district,
+        "owner_phone": case.owner_phone, "region": case.region, "district": case.district, "mfy": case.mfy,
+        "latitude": float(case.latitude) if case.latitude is not None else None,
+        "longitude": float(case.longitude) if case.longitude is not None else None,
         "package": {"id": case.package_id, "name": case.package.name},
         "status": case.status, "status_display": case.get_status_display(),
         "current_stage": case.current_stage, "current_stage_title": chain.get(case.current_stage).title,

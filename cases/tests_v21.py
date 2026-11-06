@@ -533,6 +533,14 @@ class ReportTests(GrowingHelpers):
 
         tomorrow = (timezone.localdate() + timedelta(days=1)).isoformat()
         self.assertEqual(admin.get(f"/api/reports/overview?date_from={tomorrow}").json()["cases"]["total"], 0)
+        district = Case.objects.exclude(district="").values_list("district", flat=True).first()
+        self.assertTrue(district)
+        total = admin.get("/api/reports/overview").json()["cases"]["total"]
+        same = admin.get("/api/reports/overview", {"district": f"{district} tumani"}).json()
+        self.assertEqual(same["district"], f"{district} tumani")
+        self.assertEqual(same["cases"]["total"], Case.objects.filter(district__iexact=district).count())
+        self.assertLessEqual(same["cases"]["total"], total)
+        self.assertEqual(admin.get("/api/reports/finance", {"district": "Mavjud emas tumani"}).json()["rows"], [])
         self.assertEqual(admin.get("/api/reports/cases?date_to=bad").status_code, 400)
         self.assertEqual(self.client_for(R.SUPERADMIN).get("/api/reports/finance").status_code, 200)
         for role in (R.HR, R.DIRECTOR, R.OWNER):
