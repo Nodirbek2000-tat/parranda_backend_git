@@ -47,14 +47,12 @@ def visible_cases(user: User):
 
 
 def can_execute(user: User, case: Case, number: int) -> bool:
-    # Administrator / Super Admin may complete any stage on behalf of its executor
-    # (e.g. confirm the HR or Director step when testing alone, or when a person is absent).
-    if user.role in (Role.SUPERADMIN, Role.ADMIN):
-        return True
-    if number == 1:
-        return user.role in (Role.INSPECTOR, Role.ADMIN)
+    """Only the stage's own role does the work ("Bajarildi" / "Tasdiqlash").
+
+    Admin / Super Admin never act on someone else's behalf: they approve, return or reject.
+    """
     if number == chain.OWNER_STAGE:
-        return user.role == Role.ADMIN or (user.role == Role.OWNER and case.owner_user_id == user.pk)
+        return user.role == Role.OWNER and case.owner_user_id == user.pk
     return user.role == chain.get(number).executor
 
 

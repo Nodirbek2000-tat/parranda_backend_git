@@ -46,8 +46,8 @@ class CaseListView(APIView):
         return Response([s.case_item(case) for case in qs[:500]])
 
     def post(self, request):
-        if request.user.role not in (Role.INSPECTOR, Role.ADMIN, Role.SUPERADMIN):
-            raise PermissionDenied()
+        if request.user.role != Role.INSPECTOR:
+            raise PermissionDenied("Yangi xonadonni faqat Inspektor kiritadi.")
         ser = s.CaseCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         data = dict(ser.validated_data)

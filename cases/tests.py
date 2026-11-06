@@ -31,12 +31,17 @@ class ChainHelpers(NNPTestCase):
             7: lambda: (self.submit(R.LOGISTICS, case_id, 7, photo=True), self.act(R.ADMIN, case_id, 7, "approve")),
             8: lambda: (self.submit(R.VET, case_id, 8, {"health": "good"}, photo=True),
                         self.act(R.ADMIN, case_id, 8, "approve")),
-            9: lambda: (self.submit(R.ADMIN, case_id, 9, {"received_count": 98}, photo=True),
+            9: lambda: (self.link_owner(case_id), self.submit(R.OWNER, case_id, 9, {"received_count": 98}, photo=True),
                         self.act(R.ADMIN, case_id, 9, "approve")),
         }
         for n in range(2, target):
             steps[n]()
         self.assertEqual(Case.objects.get(pk=case_id).current_stage, target)
+
+
+    def link_owner(self, case_id):
+        owner = self.users[R.OWNER]
+        self.client_for(R.ADMIN).post(f"/api/cases/{case_id}/owner-account", {"user_id": owner.pk}, format="json")
 
 
 class CreateCaseTests(ChainHelpers):
@@ -55,8 +60,9 @@ class CreateCaseTests(ChainHelpers):
         self.assertEqual(len(self.stage(detail, 1)["photos"]), 1)
         self.assertAlmostEqual(detail["latitude"], 40.998878, places=6)
 
-    def test_admin_may_create(self):
-        self.create_case(role=R.ADMIN)
+    def test_only_inspector_creates(self):
+        for role in (R.ADMIN, R.SUPERADMIN, R.HR):
+            self.assertEqual(self.client_for(role).post("/api/cases", {}, format="json").status_code, 403)
 
     def test_create_requires_photo_and_role(self):
         body = {"name": "X", "owner_full_name": "Y", "latitude": 41, "longitude": 69, "package_id": self.package.pk,
@@ -130,7 +136,7 @@ class FullChainTests(ChainHelpers):
         self.submit(R.BUILDER, case_id, 4, photo=True, expect=409)
         self.submit(R.DIRECTOR, case_id, 3, expect=409)
         self.act(R.ADMIN, case_id, 4, "approve", expect=409)
-        self.submit(R.SUPERADMIN, case_id, 5, expect=409)
+        self.submit(R.WAREHOUSE, case_id, 5, expect=409)
         self.submit(R.INSPECTOR, case_id, 1, {"conclusion": "x"}, expect=409)  # stage 1 is DONE
         self.submit(R.HR, case_id, 2)
         self.submit(R.HR, case_id, 2, expect=409)  # already done
@@ -474,13 +480,15 @@ class DeleteTests(ChainHelpers):
         self.assertEqual(self.client_for(R.WAREHOUSE).delete(f"/api/packages/{self.package.pk}").status_code, 403)
 
 
-class AdminActsForAnyStageTests(ChainHelpers):
-    def test_admin_can_confirm_hr_and_director_stages(self):
+class OnlyOwnRoleSubmitsTests(ChainHelpers):
+    def test_admin_and_superadmin_cannot_do_someone_elses_stage(self):
         cid = self.create_case()["id"]
-        detail = self.client_for(R.ADMIN).get(f"/api/cases/{cid}").json()
-        self.assertTrue(detail["can"]["submit"])  # HR stage, acted on by the Administrator
-        self.submit(R.ADMIN, cid, 2)
-        self.submit(R.ADMIN, cid, 3)
+        for role in (R.ADMIN, R.SUPERADMIN, R.DIRECTOR):
+            self.assertFalse(self.client_for(role).get(f"/api/cases/{cid}").json()["can"]["submit"])
+            self.submit(role, cid, 2, expect=403)
+        self.assertTrue(self.client_for(R.HR).get(f"/api/cases/{cid}").json()["can"]["submit"])
+        self.submit(R.HR, cid, 2)
+        self.submit(R.ADMIN, cid, 3, expect=403)
+        self.submit(R.DIRECTOR, cid, 3)
         self.assertEqual(Case.objects.get(pk=cid).current_stage, 4)
-        # Other roles still cannot touch a stage that is not theirs.
         self.submit(R.WAREHOUSE, cid, 4, photo=True, expect=403)
